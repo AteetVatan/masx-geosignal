@@ -1,0 +1,65 @@
+version: "3.9"
+
+services:
+  # ── Postgres + pgvector ─────────────────────────────
+  db:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: gsgi
+      POSTGRES_PASSWORD: gsgi_dev
+      POSTGRES_DB: gsgi_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gsgi"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Pipeline (local dev) ────────────────────────────
+  pipeline:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://gsgi:gsgi_dev@db:5432/gsgi_dev"
+      DATABASE_URL_SYNC: "postgresql://gsgi:gsgi_dev@db:5432/gsgi_dev"
+      PIPELINE_TIER: "A"
+      LOG_FORMAT: "console"
+      LOG_LEVEL: "DEBUG"
+    volumes:
+      - .:/app
+      - models:/app/models
+    command: ["python", "-m", "apps.orchestrator.main"]
+
+  # ── Run migrations ──────────────────────────────────
+  migrate:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL_SYNC: "postgresql://gsgi:gsgi_dev@db:5432/gsgi_dev"
+    command: ["alembic", "upgrade", "head"]
+    profiles:
+      - tools
+
+  # ── Run tests ───────────────────────────────────────
+  test:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://gsgi:gsgi_dev@db:5432/gsgi_dev"
+      DATABASE_URL_SYNC: "postgresql://gsgi:gsgi_dev@db:5432/gsgi_dev"
+    command: ["pytest", "-v", "--tb=short", "-x"]
+    profiles:
+      - tools
+
+volumes:
+  pgdata:
+  models:

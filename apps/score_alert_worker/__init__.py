@@ -1,0 +1,1 @@
+"""Score & alert worker app."""

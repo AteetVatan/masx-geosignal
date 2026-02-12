@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+.agent/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Models (downloaded at runtime)
+models/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# MyPy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Batch files (temp)
+/tmp/batch_*.jsonl
+
+# Docker
+.docker/
+
+# Debug / temp files
+_check_db.py
+_db_output.txt
+_verify_output.txt
