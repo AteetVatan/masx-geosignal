@@ -148,6 +148,12 @@ class Settings(BaseSettings):
     railway_environment: str = "development"
     port: int = 8080
 
+    # ── API Trigger ──────────────────────────────────
+    pipeline_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="API key for the pipeline trigger endpoint",
+    )
+
     @property
     def is_production(self) -> bool:
         return self.railway_environment == "production"

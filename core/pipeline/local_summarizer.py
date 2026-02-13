@@ -17,6 +17,7 @@ inference across multiple cores.
 from __future__ import annotations
 
 import os
+import time
 from concurrent.futures import ProcessPoolExecutor
 from functools import lru_cache
 from pathlib import Path
@@ -47,6 +48,20 @@ def _get_pool() -> ProcessPoolExecutor:
         )
         logger.info("summarizer_pool_created", workers=workers)
     return _pool
+
+
+def shutdown_pool() -> None:
+    """Shut down the worker pool and free worker-process memory.
+
+    Each worker holds a full DistilBART model (~2.4 GB).
+    Call this after local pre-summarisation is complete so the
+    memory is released while clustering/LLM summarisation runs.
+    """
+    global _pool
+    if _pool is not None:
+        _pool.shutdown(wait=True)
+        _pool = None
+        logger.info("summarizer_pool_shut_down")
 
 
 # ── Per-worker state (loaded once per child process) ─────────
@@ -259,6 +274,7 @@ def presummarize_articles(
     Short articles (< 1000 chars) are kept as-is.
     """
     # Separate articles that need summarisation vs pass-through
+    _t0 = time.perf_counter()
     to_summarize: list[tuple[int, str]] = []
     results: dict[int, str] = {}
 
@@ -283,4 +299,10 @@ def presummarize_articles(
     out: list[dict[str, Any]] = []
     for idx, article in enumerate(articles):
         out.append({**article, "content": results[idx]})
+    logger.info(
+        "presummarize_done",
+        total=len(articles),
+        summarized=len(to_summarize),
+        elapsed_s=round(time.perf_counter() - _t0, 2),
+    )
     return out

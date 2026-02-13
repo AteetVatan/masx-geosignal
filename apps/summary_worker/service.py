@@ -10,7 +10,7 @@ For each flashpoint_id:
 
 from __future__ import annotations
 
-import contextlib
+import time
 import uuid
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
@@ -68,6 +68,7 @@ class SummaryService:
     async def _summarize_flashpoint(self, flashpoint_id: uuid.UUID) -> int:
         """Summarize all clusters for one flashpoint → write news_clusters."""
         structlog.contextvars.bind_contextvars(flashpoint_id=str(flashpoint_id))
+        _t0 = time.perf_counter()
 
         feed_table = self.table_ctx.feed_entries
 
@@ -178,16 +179,17 @@ class SummaryService:
                 )
                 written += 1
 
-        # Update job statuses
-        for _, articles in sorted_clusters:
-            for article in articles:
-                with contextlib.suppress(Exception):
-                    await self.job_repo.update_status(
-                        uuid.UUID(article["feed_entry_id"]),
-                        self.run_id,
-                        JobStatus.SUMMARIZED,
-                    )
+        # Bulk update job statuses
+        all_entry_ids = [
+            uuid.UUID(article["feed_entry_id"])
+            for _, articles in sorted_clusters
+            for article in articles
+        ]
+        if all_entry_ids:
+            await self.job_repo.bulk_update_status(
+                all_entry_ids, self.run_id, JobStatus.SUMMARIZED
+            )
 
-        logger.info("flashpoint_summarized", clusters_written=written)
+        logger.info("summarize_flashpoint_done", clusters_written=written, elapsed_s=round(time.perf_counter() - _t0, 2))
         return written
 

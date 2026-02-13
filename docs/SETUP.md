@@ -206,7 +206,15 @@ docker compose run --rm migrate
 docker compose up pipeline
 ```
 
-### 4.4 Run Tests (Docker)
+### 4.4 Run the API Server (Docker)
+
+```bash
+docker compose up api
+```
+
+The API is available at `http://localhost:8080`. Default API key is `dev-api-key-change-me` (set via `PIPELINE_API_KEY` in `docker-compose.yml`).
+
+### 4.5 Run Tests (Docker)
 
 ```bash
 docker compose run --rm test
@@ -459,7 +467,49 @@ gsgi-ingest --date 2026-02-12
 gsgi-cluster run_20260212_040000_abc12345 --date 2026-02-12
 gsgi-summarize run_20260212_040000_abc12345 --date 2026-02-12
 gsgi-score run_20260212_040000_abc12345 --date 2026-02-12
+gsgi-api --port 8080
 ```
+
+### 7.6 Running the Pipeline Trigger API
+
+The API server lets you trigger pipeline runs and query their status via HTTP.
+
+```bash
+# Set your API key in .env first:
+# PIPELINE_API_KEY=your-secret-api-key-here
+
+# Start the API server
+uvicorn apps.api.main:app --host 0.0.0.0 --port 8080
+# or: gsgi-api --port 8080
+# or: python -m apps.api.main --port 8080
+```
+
+**Endpoints:**
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/health` | No | Liveness check |
+| `POST` | `/pipeline/run` | API key | Trigger a pipeline run |
+| `GET` | `/pipeline/runs?date=YYYY-MM-DD` | API key | List runs for a date |
+| `GET` | `/pipeline/runs/{run_id}` | API key | Get status of a specific run |
+
+**Example: Trigger a pipeline run:**
+
+```bash
+curl -X POST http://localhost:8080/pipeline/run \
+  -H "X-Api-Key: your-secret-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{"target_date": "2026-02-12", "tier": "A"}'
+```
+
+**Example: Check run status:**
+
+```bash
+curl http://localhost:8080/pipeline/runs?date=2026-02-12 \
+  -H "X-Api-Key: your-secret-api-key-here"
+```
+
+> **Safety features**: The API rejects triggers if a pipeline is already running, and auto-recovers runs stuck in `RUNNING` state for >2 hours.
 
 ---
 
@@ -1048,6 +1098,7 @@ LLM_API_KEY=your-key-here       # Only for Tier C
 LLM_BASE_URL=https://api.together.xyz/v1
 LLM_MODEL=meta-llama/Llama-3.2-3B-Instruct-Turbo
 PIPELINE_TIER=B
+PIPELINE_API_KEY=your-secret-api-key  # Required for API trigger service
 MAX_CONCURRENT_FETCHES=50
 LOCAL_SUMMARIZER_WORKERS=8      # CPUs for DistilBART (default: 8)
 LOG_LEVEL=INFO
@@ -1064,7 +1115,18 @@ RAILWAY_ENVIRONMENT=production
 
 > The orchestrator auto-detects today's date for table resolution. No `--date` flag needed in production.
 
-### 11.4 Run Initial Migration
+### 11.4 Configure API Trigger Service (Optional)
+
+If you want to trigger the pipeline via HTTP instead of (or in addition to) cron:
+
+1. Create a **second service** in Railway from the same repo
+2. Set **Start Command**: `uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT`
+3. Set **Restart Policy**: Always
+4. Add `PIPELINE_API_KEY` to the environment variables
+
+The API will be available at your Railway service URL. Use the `/pipeline/run` endpoint to trigger runs.
+
+### 11.5 Run Initial Migration
 
 In Railway console or via a one-off command:
 
@@ -1072,7 +1134,7 @@ In Railway console or via a one-off command:
 alembic upgrade head
 ```
 
-### 11.5 Monitor
+### 11.6 Monitor
 
 Check Railway logs for structured JSON output with `run_id`, stage timings, and error details.
 
@@ -1110,7 +1172,10 @@ After your first successful pipeline run:
 | Lint | `ruff check .` |
 | Format | `ruff format .` |
 | Type check | `mypy core/ apps/` |
+| Start API server | `uvicorn apps.api.main:app --port 8080` |
+| Trigger pipeline (API) | `curl -X POST http://localhost:8080/pipeline/run -H "X-Api-Key: KEY" -H "Content-Type: application/json" -d '{"target_date": "2026-02-12"}'` |
 | Rollback DB | `alembic downgrade base` |
 | Docker start | `docker compose up -d db` |
+| Docker API | `docker compose up api` |
 | Docker migrate | `docker compose run --rm migrate` |
 | Docker test | `docker compose run --rm test` |

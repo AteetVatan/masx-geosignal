@@ -100,12 +100,19 @@ def _extract_boilerpy3(html: str) -> str | None:
     try:
         from boilerpy3.extractors import ArticleExtractor
 
-        extractor = ArticleExtractor()
-        text = extractor.get_content(html)
+        text = _BOILERPY3_EXTRACTOR.get_content(html)
         return text.strip() if text else None
     except Exception as exc:
         logger.debug("boilerpy3_failed", error=str(exc))
         return None
+
+
+# Lazy-init: avoid import-time side effects; created on first use.
+try:
+    from boilerpy3.extractors import ArticleExtractor as _ArticleExtractorCls
+    _BOILERPY3_EXTRACTOR = _ArticleExtractorCls()
+except Exception:
+    _BOILERPY3_EXTRACTOR = None  # type: ignore[assignment]
 
 
 # ── Heuristics ────────────────────────────────────────

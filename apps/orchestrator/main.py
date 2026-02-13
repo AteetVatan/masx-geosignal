@@ -67,7 +67,7 @@ async def run_pipeline(target_date: date | None = None) -> None:
         await ensure_output_table(session, table_ctx.target_date)
 
         # 3. Create processing run
-        await run_repo.create_run(run_id, settings.pipeline_tier.value)
+        await run_repo.create_run(run_id, settings.pipeline_tier.value, target_date=str(table_ctx.target_date))
         await session.commit()
 
         try:
@@ -92,12 +92,10 @@ async def run_pipeline(target_date: date | None = None) -> None:
                 await session.commit()
                 return
 
-            # 6. Create job records (claims)
+            # 6. Create job records (claims) — single bulk INSERT
             t0 = time.perf_counter()
-            claimed = 0
-            for entry in entries:
-                if await job_repo.claim_job(entry["id"], run_id):
-                    claimed += 1
+            entry_ids = [entry["id"] for entry in entries]
+            claimed = await job_repo.claim_jobs_bulk(entry_ids, run_id)
             await session.commit()
             timings["job_claiming"] = time.perf_counter() - t0
 
@@ -110,7 +108,14 @@ async def run_pipeline(target_date: date | None = None) -> None:
             ingest_svc = IngestService(session, run_id, settings, table_ctx)
             await ingest_svc.process_batch(entries)
             await session.commit()
+            session.expunge_all()  # free ORM identity map after ingestion
             timings["ingestion_total"] = time.perf_counter() - t0
+            logger.info("pipeline_stage_done", stage="ingestion", entries=total, elapsed_s=round(timings["ingestion_total"], 2))
+
+            # Free DistilBART worker processes (~5 GB) now that
+            # local pre-summarisation is complete.
+            from core.pipeline.local_summarizer import shutdown_pool
+            shutdown_pool()
 
             # 8. Run clustering if tier allows
             if settings.tier_has_clustering:
@@ -126,9 +131,15 @@ async def run_pipeline(target_date: date | None = None) -> None:
                     count = await cluster_svc.cluster_flashpoint(fp_id)
                     clusters_created += count
                 await session.commit()
+                session.expunge_all()  # free ORM identity map after clustering
                 timings["clustering"] = time.perf_counter() - t0
 
-                logger.info("clustering_complete", clusters_created=clusters_created)
+                logger.info(
+                    "pipeline_stage_done",
+                    stage="clustering",
+                    clusters_created=clusters_created,
+                    elapsed_s=round(timings["clustering"], 2),
+                )
 
                 # 9. Summarization
                 from apps.summary_worker.service import SummaryService
@@ -137,9 +148,14 @@ async def run_pipeline(target_date: date | None = None) -> None:
                 summary_svc = SummaryService(session, run_id, settings, table_ctx)
                 await summary_svc.summarize_all_clusters(flashpoint_ids)
                 await session.commit()
+                session.expunge_all()  # free ORM identity map after summarization
                 timings["summarization"] = time.perf_counter() - t0
 
-                logger.info("summarization_complete")
+                logger.info(
+                    "pipeline_stage_done",
+                    stage="summarization",
+                    elapsed_s=round(timings["summarization"], 2),
+                )
 
             # 10. Gather stats
             timings["pipeline_total"] = time.perf_counter() - pipeline_t0
@@ -216,7 +232,7 @@ def cli(tier: str | None, target_date_str: str | None) -> None:
 
     if tier:
         os.environ["PIPELINE_TIER"] = tier
-    target_date_str = "2025-11-03"
+
     target_date = None
     if target_date_str:
         target_date = date.fromisoformat(target_date_str)

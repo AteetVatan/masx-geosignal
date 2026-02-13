@@ -10,6 +10,7 @@ For each flashpoint_id:
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import TYPE_CHECKING
 
@@ -55,6 +56,7 @@ class ClusterService:
         structlog.contextvars.bind_contextvars(
             flashpoint_id=str(flashpoint_id),
         )
+        _t0 = time.perf_counter()
 
         # 1. Get embeddings
         embeddings_data = await self.vector_repo.get_embeddings_for_flashpoint(
@@ -109,16 +111,19 @@ class ClusterService:
         ]
         await self.cluster_repo.insert_cluster_members(members)
 
-        # 4. Update job status
-        for a in assignments:
-            await self.job_repo.update_status(a.feed_entry_id, self.run_id, JobStatus.CLUSTERED)
+        # 4. Bulk update job status
+        assigned_ids = [a.feed_entry_id for a in assignments]
+        await self.job_repo.bulk_update_status(
+            assigned_ids, self.run_id, JobStatus.CLUSTERED
+        )
 
         # Count unique clusters
         unique_clusters = len(set(a.cluster_uuid for a in assignments))
         logger.info(
-            "flashpoint_clustered",
+            "cluster_flashpoint_done",
             entries=len(assignments),
             clusters=unique_clusters,
+            elapsed_s=round(time.perf_counter() - _t0, 2),
         )
 
         return unique_clusters

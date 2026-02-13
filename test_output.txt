@@ -1,0 +1,174 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.4, pytest-9.0.2, pluggy-1.6.0 -- S:\SYNC\programming\MASX-GSGI\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: S:\SYNC\programming\MASX-GSGI
+configfile: pyproject.toml
+plugins: anyio-4.12.1, Faker-40.4.0, asyncio-1.3.0, cov-7.0.0, mock-3.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 114 items
+
+tests/test_cluster.py::TestUnionFind::test_basic_union PASSED            [  0%]
+tests/test_cluster.py::TestUnionFind::test_transitive_union PASSED       [  1%]
+tests/test_cluster.py::TestUnionFind::test_no_union PASSED               [  2%]
+tests/test_cluster.py::TestUnionFind::test_self_union PASSED             [  3%]
+tests/test_cluster.py::TestClustering::test_empty_input PASSED           [  4%]
+tests/test_cluster.py::TestClustering::test_single_entry PASSED          [  5%]
+tests/test_cluster.py::TestClustering::test_two_clusters_formed FAILED   [  6%]
+tests/test_cluster.py::TestClustering::test_deterministic_clustering PASSED [  7%]
+tests/test_cluster.py::TestClustering::test_cluster_id_dense_rank PASSED [  7%]
+tests/test_cluster.py::TestClustering::test_high_threshold_many_clusters PASSED [  8%]
+tests/test_cluster.py::TestClustering::test_low_threshold_fewer_clusters PASSED [  9%]
+tests/test_cluster.py::TestClustering::test_similarity_scores_valid PASSED [ 10%]
+tests/test_config.py::TestPipelineTier::test_tier_a_no_embeddings PASSED [ 11%]
+tests/test_config.py::TestPipelineTier::test_tier_b_has_embeddings_and_clustering PASSED [ 12%]
+tests/test_config.py::TestPipelineTier::test_tier_c_has_everything PASSED [ 13%]
+tests/test_config.py::TestDefaults::test_default_embedding_model PASSED  [ 14%]
+tests/test_config.py::TestDefaults::test_default_concurrency PASSED      [ 14%]
+tests/test_config.py::TestDefaults::test_default_tier_is_a FAILED        [ 15%]
+tests/test_config.py::TestDefaults::test_is_production PASSED            [ 16%]
+tests/test_config.py::TestDefaults::test_not_production_by_default FAILED [ 17%]
+tests/test_dedupe.py::TestNormalization::test_lowercase PASSED           [ 18%]
+tests/test_dedupe.py::TestNormalization::test_whitespace PASSED          [ 19%]
+tests/test_dedupe.py::TestNormalization::test_punctuation_removed PASSED [ 20%]
+tests/test_dedupe.py::TestNormalization::test_unicode_normalized PASSED  [ 21%]
+tests/test_dedupe.py::TestExactDedup::test_identical_text_is_duplicate PASSED [ 21%]
+tests/test_dedupe.py::TestExactDedup::test_different_text_not_duplicate PASSED [ 22%]
+tests/test_dedupe.py::TestExactDedup::test_same_content_different_case PASSED [ 23%]
+tests/test_dedupe.py::TestExactDedup::test_content_hash_consistent PASSED [ 24%]
+tests/test_dedupe.py::TestNearDedup::test_very_similar_text_detected PASSED [ 25%]
+tests/test_dedupe.py::TestNearDedup::test_completely_different_not_near_dup PASSED [ 26%]
+tests/test_dedupe.py::TestStats::test_stats_tracking PASSED              [ 27%]
+tests/test_extract.py::TestIndividualExtractors::test_trafilatura_extracts_article PASSED [ 28%]
+tests/test_extract.py::TestIndividualExtractors::test_readability_extracts_article PASSED [ 28%]
+tests/test_extract.py::TestIndividualExtractors::test_justext_extracts_article PASSED [ 29%]
+tests/test_extract.py::TestIndividualExtractors::test_boilerpy3_extracts_article PASSED [ 30%]
+tests/test_extract.py::TestIndividualExtractors::test_extractors_handle_empty_html PASSED [ 31%]
+tests/test_extract.py::TestIndividualExtractors::test_extractors_handle_garbage PASSED [ 32%]
+tests/test_extract.py::TestHeuristics::test_detects_js_required PASSED   [ 33%]
+tests/test_extract.py::TestHeuristics::test_detects_paywall PASSED       [ 34%]
+tests/test_extract.py::TestHeuristics::test_detects_no_text PASSED       [ 35%]
+tests/test_extract.py::TestHeuristics::test_no_issue_with_good_html PASSED [ 35%]
+tests/test_extract.py::TestHeuristics::test_needs_browser_js_page PASSED [ 36%]
+tests/test_extract.py::TestHeuristics::test_no_browser_needed_for_good_html PASSED [ 37%]
+tests/test_extract.py::TestEnsemble::test_ensemble_extracts_good_html PASSED [ 38%]
+tests/test_extract.py::TestEnsemble::test_ensemble_fails_on_empty PASSED [ 39%]
+tests/test_extract.py::TestEnsemble::test_ensemble_respects_min_length PASSED [ 40%]
+tests/test_extract.py::TestSanitization::test_removes_null_bytes PASSED  [ 41%]
+tests/test_extract.py::TestSanitization::test_normalizes_whitespace PASSED [ 42%]
+tests/test_extract.py::TestSanitization::test_preserves_paragraph_breaks PASSED [ 42%]
+tests/test_extract.py::TestSanitization::test_collapses_excessive_newlines PASSED [ 43%]
+tests/test_fetch.py::TestCircuitBreaker::test_starts_closed PASSED       [ 44%]
+tests/test_fetch.py::TestCircuitBreaker::test_opens_after_threshold PASSED [ 45%]
+tests/test_fetch.py::TestCircuitBreaker::test_resets_on_success PASSED   [ 46%]
+tests/test_fetch.py::TestCircuitBreaker::test_auto_resets_after_cooldown PASSED [ 47%]
+tests/test_fetch.py::TestCircuitBreaker::test_failure_count_tracks PASSED [ 48%]
+tests/test_fetch.py::TestCircuitBreaker::test_default_threshold_is_5 PASSED [ 49%]
+tests/test_local_summarizer.py::TestChunkText::test_short_text_single_chunk PASSED [ 50%]
+tests/test_local_summarizer.py::TestChunkText::test_respects_chunk_limit PASSED [ 50%]
+tests/test_local_summarizer.py::TestChunkText::test_empty_text PASSED    [ 51%]
+tests/test_local_summarizer.py::TestSummarizeArticle::test_short_text_returned_as_is PASSED [ 52%]
+tests/test_local_summarizer.py::TestSummarizeArticle::test_long_text_dispatches PASSED [ 53%]
+tests/test_local_summarizer.py::TestPresummarizeArticles::test_dispatches_long_articles_to_pool PASSED [ 54%]
+tests/test_local_summarizer.py::TestPresummarizeArticles::test_short_content_skips_pool PASSED [ 55%]
+tests/test_local_summarizer.py::TestPresummarizeArticles::test_empty_content_unchanged PASSED [ 56%]
+tests/test_local_summarizer.py::TestPresummarizeArticles::test_mixed_short_and_long PASSED [ 57%]
+tests/test_score.py::TestHotspotScoring::test_score_in_valid_range PASSED [ 57%]
+tests/test_score.py::TestHotspotScoring::test_higher_article_count_higher_score PASSED [ 58%]
+tests/test_score.py::TestHotspotScoring::test_recency_decay PASSED       [ 59%]
+tests/test_score.py::TestHotspotScoring::test_conflict_topic_scores_higher PASSED [ 60%]
+tests/test_score.py::TestHotspotScoring::test_diversity_component PASSED [ 61%]
+tests/test_score.py::TestHotspotScoring::test_no_recency PASSED          [ 62%]
+tests/test_score.py::TestHotspotScoring::test_components_present PASSED  [ 63%]
+tests/test_score.py::TestHotspotScoring::test_zero_articles PASSED       [ 64%]
+tests/test_summarize.py::TestExtractiveSummary::test_basic_summary PASSED [ 64%]
+tests/test_summarize.py::TestExtractiveSummary::test_empty_articles PASSED [ 65%]
+tests/test_summarize.py::TestExtractiveSummary::test_articles_without_content PASSED [ 66%]
+tests/test_summarize.py::TestExtractiveSummary::test_max_sentences_respected PASSED [ 67%]
+tests/test_summarize.py::TestMetadataAggregation::test_aggregates_domains PASSED [ 68%]
+tests/test_summarize.py::TestMetadataAggregation::test_aggregates_languages PASSED [ 69%]
+tests/test_summarize.py::TestMetadataAggregation::test_aggregates_urls PASSED [ 70%]
+tests/test_summarize.py::TestMetadataAggregation::test_aggregates_images PASSED [ 71%]
+tests/test_summarize.py::TestMetadataAggregation::test_empty_articles PASSED [ 71%]
+tests/test_summarize.py::TestMetadataAggregation::test_caps_urls_at_50 PASSED [ 72%]
+tests/test_summarize.py::TestLocalSummarization::test_produces_valid_result PASSED [ 73%]
+tests/test_summarize.py::TestBatchAPI::test_build_batch_request PASSED   [ 74%]
+tests/test_summarize.py::TestBatchAPI::test_parse_batch_results_success PASSED [ 75%]
+tests/test_summarize.py::TestBatchAPI::test_parse_batch_results_empty PASSED [ 76%]
+tests/test_summarize.py::TestBatchAPI::test_parse_batch_results_error PASSED [ 77%]
+tests/test_summarize.py::TestLLMRetryFallback::test_retry_succeeds_on_second_attempt PASSED [ 78%]
+tests/test_summarize.py::TestLLMRetryFallback::test_fallback_on_primary_exhausted PASSED [ 78%]
+tests/test_summarize.py::TestLLMRetryFallback::test_both_providers_fail_raises PASSED [ 79%]
+tests/test_summarize.py::TestParseLLMResponse::test_valid_toml PASSED    [ 80%]
+tests/test_summarize.py::TestParseLLMResponse::test_valid_json PASSED    [ 81%]
+tests/test_summarize.py::TestParseLLMResponse::test_table_array_with_summary PASSED [ 82%]
+tests/test_summarize.py::TestParseLLMResponse::test_noisy_response_with_summary_assignment PASSED [ 83%]
+tests/test_summarize.py::TestParseLLMResponse::test_pure_prose_no_structure PASSED [ 84%]
+tests/test_summarize.py::TestParseLLMResponse::test_prose_with_meta_noise PASSED [ 85%]
+tests/test_summarize.py::TestParseLLMResponse::test_garbage_returns_raw PASSED [ 85%]
+tests/test_summarize.py::TestParseLLMResponse::test_code_fence_with_broken_toml_and_prose PASSED [ 86%]
+tests/test_summarize.py::TestParseLLMResponse::test_sentences_extracted_from_varied_toml_noise PASSED [ 87%]
+tests/test_toml_serde.py::TestDictToToml::test_basic_dict PASSED         [ 88%]
+tests/test_toml_serde.py::TestDictToToml::test_strips_none_values PASSED [ 89%]
+tests/test_toml_serde.py::TestDictToToml::test_nested_dict PASSED        [ 90%]
+tests/test_toml_serde.py::TestDictToToml::test_list_of_dicts PASSED      [ 91%]
+tests/test_toml_serde.py::TestDictToToml::test_float_coercion PASSED     [ 92%]
+tests/test_toml_serde.py::TestDictToToml::test_empty_dict PASSED         [ 92%]
+tests/test_toml_serde.py::TestTomlToDict::test_basic_toml PASSED         [ 93%]
+tests/test_toml_serde.py::TestTomlToDict::test_fenced_toml PASSED        [ 94%]
+tests/test_toml_serde.py::TestTomlToDict::test_generic_fenced PASSED     [ 95%]
+tests/test_toml_serde.py::TestTomlToDict::test_mixed_output PASSED       [ 96%]
+tests/test_toml_serde.py::TestTomlToDict::test_invalid_toml_raises PASSED [ 97%]
+tests/test_toml_serde.py::TestTomlToDict::test_nested_toml PASSED        [ 98%]
+tests/test_toml_serde.py::TestRoundTrip::test_simple_roundtrip PASSED    [ 99%]
+tests/test_toml_serde.py::TestRoundTrip::test_articles_roundtrip PASSED  [100%]
+
+================================== FAILURES ===================================
+___________________ TestClustering.test_two_clusters_formed ___________________
+
+self = <tests.test_cluster.TestClustering object at 0x000002227F009520>
+similar_embeddings = ([UUID('00000000-0000-0000-0000-000000000000'), UUID('00000000-0000-0000-0000-000000000001'), UUID('00000000-0000-0000...939, 1.0373955128058767, -0.05363715128699033, 0.011962343205557478, 0.10370413348749868, -0.045969229579321175, ...]])
+
+    def test_two_clusters_formed(
+        self, similar_embeddings: tuple[list[uuid.UUID], list[list[float]]]
+    ) -> None:
+        ids, embeddings = similar_embeddings
+        result = cluster_entries(ids, embeddings, k=3, cosine_threshold=0.5)
+    
+        # Should form 2 clusters
+        cluster_ids = set(a.cluster_id for a in result)
+>       assert len(cluster_ids) == 2
+E       assert 4 == 2
+E        +  where 4 = len({1, 2, 3, 4})
+
+tests\test_cluster.py:102: AssertionError
+---------------------------- Captured stdout call -----------------------------
+2026-02-13 14:09:49 [info     ] clustering_complete            largest_cluster=2 num_clusters=4 total_entries=6
+_____________________ TestDefaults.test_default_tier_is_a _____________________
+
+self = <tests.test_config.TestDefaults object at 0x000002227F3399A0>
+
+    def test_default_tier_is_a(self) -> None:
+        s = Settings(database_url="postgresql+asyncpg://x")
+>       assert s.pipeline_tier == PipelineTier.A
+E       AssertionError: assert <PipelineTier.C: 'C'> == <PipelineTier.A: 'A'>
+E         
+E         - A
+E         + C
+
+tests\test_config.py:52: AssertionError
+_________________ TestDefaults.test_not_production_by_default _________________
+
+self = <tests.test_config.TestDefaults object at 0x000002227F339BB0>
+
+    def test_not_production_by_default(self) -> None:
+        s = Settings(database_url="postgresql+asyncpg://x")
+>       assert not s.is_production
+E       AssertionError: assert not True
+E        +  where True = Settings(database_url='postgresql+asyncpg://x', database_url_sync='postgresql://postgres.uejhhobzicbxysgmlduc:tQ2XuWxSprgfjrIk@aws-0-eu-central-1.pooler.supabase.com:6543/postgres', supabase_url='https://uejhhobzicbxysgmlduc.supabase.co', supabase_anon_key='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVlamhob2J6aWNieHlzZ21sZHVjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE3NDI2OTIsImV4cCI6MjA2NzMxODY5Mn0.uuA3PvKA5uBs-Ml3mhK9kW4sXoaMjBHO5ftDCGfZbWA', supabase_service_role_key=SecretStr('**********'), supabase_db_password=SecretStr('**********'), llm_provider='together', llm_api_key=SecretStr('**********'), llm_base_url='https://api.together.xyz/v1', llm_model='meta-llama/Llama-3.2-3B-Instruct-Turbo', llm_batch_enabled=False, llm_rpm_limit=599, llm_summarize_batch_size=20, llm_provider_fallback='mistral', llm_fallback_api_key=SecretStr('**********'), llm_fallback_base_url='https://api.mistral.ai/v1', llm_fallback_model='mistral-small-latest', openai_api_key=SecretStr(''), pipeline_tier=<PipelineTier.C: 'C'>, max_concurrent_fetches=50, per_domain_concurrency=3, fetch_timeout_seconds=30, request_delay_seconds=0.25, embedding_model='all-MiniLM-L6-v2', embedding_dimension=384, cluster_knn_k=10, cluster_cosine_threshold=0.65, iptc_model_dir='models/iptc-classifier', ner_model='Davlan/distilbert-base-multilingual-cased-ner-hrl', local_summarizer_model='sshleifer/distilbart-cnn-12-6', local_summarizer_onnx_dir='models/distilbart-cnn-onnx', local_summarizer_workers=2, fasttext_model_dir='models', min_content_length=200, playwright_enabled=False, extraction_timeout_seconds=20, minhash_num_perm=128, minhash_threshold=0.8, premium_llm_top_pct=0.1, log_level='DEBUG', log_format='console', railway_environment='production', port=8080).is_production
+
+tests\test_config.py:60: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_cluster.py::TestClustering::test_two_clusters_formed - asse...
+FAILED tests/test_config.py::TestDefaults::test_default_tier_is_a - Assertion...
+FAILED tests/test_config.py::TestDefaults::test_not_production_by_default - A...
+======================= 3 failed, 111 passed in 25.55s ========================

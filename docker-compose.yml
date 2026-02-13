@@ -35,6 +35,25 @@ services:
       - models:/app/models
     command: ["python", "-m", "apps.orchestrator.main"]
 
+  # ── API Server ──────────────────────────────────
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://gsgi:gsgi_dev@db:5432/gsgi_dev"
+      DATABASE_URL_SYNC: "postgresql://gsgi:gsgi_dev@db:5432/gsgi_dev"
+      PIPELINE_API_KEY: "dev-api-key-change-me"
+      LOG_FORMAT: "console"
+      LOG_LEVEL: "DEBUG"
+    volumes:
+      - .:/app
+      - models:/app/models
+    command: ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+
   # ── Run migrations ──────────────────────────────────
   migrate:
     build: .

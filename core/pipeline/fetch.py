@@ -130,8 +130,42 @@ class AsyncFetcher:
 
         return urlparse(url).netloc
 
+    @staticmethod
+    def _is_safe_url(url: str) -> bool:
+        """Block requests to private/link-local/loopback networks (SSRF protection)."""
+        import ipaddress
+        import socket
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+
+        # Only allow http(s)
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Resolve hostname to IP and check against private ranges
+        try:
+            addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for family, _type, _proto, _canonname, sockaddr in addr_info:
+                ip = ipaddress.ip_address(sockaddr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    return False
+        except (socket.gaierror, ValueError):
+            # If we can't resolve, allow it — the fetch will fail naturally
+            return True
+
+        return True
+
     async def fetch(self, url: str) -> FetchResult:
         """Fetch a URL with all protections."""
+        # SSRF check
+        if not self._is_safe_url(url):
+            raise FetchError(f"URL blocked by SSRF policy: {url}")
+
         domain = self._get_domain(url)
         cb = self._circuit_breakers[domain]
 

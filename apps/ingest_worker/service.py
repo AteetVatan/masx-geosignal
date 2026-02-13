@@ -79,8 +79,8 @@ class IngestService:
                      Each dict has keys: id, flashpoint_id, url, title, content, etc.
         """
         # Split entries: those needing fetch vs those with content from a prior run
-        needs_fetch = [e for e in entries if not e.get("content")]
-        already_fetched = [e for e in entries if e.get("content")]
+        needs_fetch = [e for e in entries if not e.get("has_content")]
+        already_fetched = [e for e in entries if e.get("has_content")]
 
         logger.info(
             "ingest_batch_start",
@@ -91,11 +91,24 @@ class IngestService:
 
         # ── Process entries that already have content (resume path) ──
         if already_fetched:
+            _t_resume = time.perf_counter()
+            # Batch-fetch heavy columns (content, entities, geo_entities)
+            resume_ids = [e["id"] for e in already_fetched]
+            content_rows = await self.entry_repo.get_entry_content_batch(
+                self.table_ctx, resume_ids
+            )
+            content_map = {row["id"]: row for row in content_rows}
+
             chunk_size = 100
             for i in range(0, len(already_fetched), chunk_size):
                 chunk = already_fetched[i : i + chunk_size]
                 for entry in chunk:
                     try:
+                        # Merge heavy columns into entry dict
+                        heavy = content_map.get(entry["id"], {})
+                        entry["content"] = heavy.get("content")
+                        entry["entities"] = heavy.get("entities")
+                        entry["geo_entities"] = heavy.get("geo_entities")
                         await self._process_fetched(
                             entry, {"already_has_content": True}
                         )
@@ -106,15 +119,22 @@ class IngestService:
                         )
                         self._failed += 1
                 await self.session.commit()
+                self.session.expunge_all()  # Free ORM identity map memory
 
-            logger.info(
+            logger.debug(
                 "resume_chunk_done",
                 processed=self._processed,
                 failed=self._failed,
                 deduped=self._deduped,
             )
+            logger.info(
+                "ingest_resume_done",
+                entries=len(already_fetched),
+                elapsed_s=round(time.perf_counter() - _t_resume, 2),
+            )
 
         # ── Process entries that need fetching (normal path) ──
+        _t_fetch_all = time.perf_counter()
         if needs_fetch:
             async with AsyncFetcher(
                 max_concurrent=self.settings.max_concurrent_fetches,
@@ -127,6 +147,7 @@ class IngestService:
                     chunk = needs_fetch[i : i + chunk_size]
 
                     # ── Phase 1: Fetch all URLs in this chunk concurrently ──
+                    _t_chunk_fetch = time.perf_counter()
                     fetch_tasks = [
                         self._safe_fetch(entry, fetcher) for entry in chunk
                     ]
@@ -147,8 +168,9 @@ class IngestService:
 
                     # Commit after each chunk
                     await self.session.commit()
+                    self.session.expunge_all()  # Free ORM identity map memory
 
-                    logger.info(
+                    logger.debug(
                         "ingest_chunk_done",
                         chunk=i // chunk_size + 1,
                         processed=self._processed,
@@ -156,9 +178,24 @@ class IngestService:
                         deduped=self._deduped,
                     )
 
+        if needs_fetch:
+            logger.info(
+                "ingest_fetch_done",
+                entries=len(needs_fetch),
+                processed=self._processed,
+                failed=self._failed,
+                deduped=self._deduped,
+                elapsed_s=round(time.perf_counter() - _t_fetch_all, 2),
+            )
+
         # Run embeddings in batch if tier allows
         if self.settings.tier_has_embeddings:
+            _t_embed = time.perf_counter()
             await self._batch_embed()
+            logger.info(
+                "ingest_embed_done",
+                elapsed_s=round(time.perf_counter() - _t_embed, 2),
+            )
 
         stats = {
             "processed": self._processed,
@@ -464,13 +501,16 @@ class IngestService:
             batch_size=64,
         )
 
-        # Store in pgvector
-        for eid, emb in zip(entry_ids, embeddings, strict=True):
-            await self.vector_repo.upsert_embedding(eid, emb, self.settings.embedding_model)
+        # Bulk store in pgvector (chunked to stay within param limits)
+        embedding_pairs = list(zip(entry_ids, embeddings, strict=True))
+        await self.vector_repo.bulk_upsert_embeddings(
+            embedding_pairs, self.settings.embedding_model
+        )
 
-        # Update job status
-        for eid in entry_ids:
-            await self.job_repo.update_status(eid, self.run_id, JobStatus.EMBEDDED)
+        # Bulk update job status
+        await self.job_repo.bulk_update_status(
+            entry_ids, self.run_id, JobStatus.EMBEDDED
+        )
 
         await self.session.commit()
         logger.info("batch_embedding_complete", count=len(entry_ids))

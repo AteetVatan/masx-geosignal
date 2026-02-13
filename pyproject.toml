@@ -57,6 +57,9 @@ dependencies = [
     "tomli_w>=1.0",
     "blingfire>=0.1.8",
     "optimum[onnxruntime]>=1.17",
+    # -- API --
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
 ]
 
 [project.optional-dependencies]
@@ -85,6 +88,7 @@ gsgi-ingest = "apps.ingest_worker.main:cli"
 gsgi-cluster = "apps.cluster_worker.main:cli"
 gsgi-summarize = "apps.summary_worker.main:cli"
 gsgi-score = "apps.score_alert_worker.main:cli"
+gsgi-api = "apps.api.main:cli"
 
 [tool.setuptools.packages.find]
 include = ["core*", "apps*"]

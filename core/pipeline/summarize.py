@@ -22,6 +22,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -232,12 +233,15 @@ def _estimate_max_tokens(messages: list[dict[str, str]]) -> int:
     return budget
 
 
+@lru_cache(maxsize=1)
 def get_llm_client() -> Any:
     """
-    Create an OpenAI-compatible client for the configured LLM provider.
+    Create and cache an OpenAI-compatible client for the configured LLM provider.
 
     Works with Together AI, OpenAI, Mistral, Groq, DeepSeek, etc.
     All use the OpenAI Python SDK with a custom base_url.
+
+    Cached to reuse the underlying httpx connection pool across calls.
     """
     import openai
 
@@ -253,12 +257,15 @@ def get_llm_client() -> Any:
     )
 
 
+@lru_cache(maxsize=1)
 def get_fallback_llm_client() -> Any:
     """
-    Create an OpenAI-compatible client for the *fallback* LLM provider.
+    Create and cache an OpenAI-compatible client for the *fallback* LLM provider.
 
     Used when the primary provider fails after retries.
     Defaults to Mistral (cheapest: $0.10 / $0.30 per 1M tokens).
+
+    Cached to reuse the underlying httpx connection pool across calls.
     """
     import openai
 
@@ -334,6 +341,13 @@ def _clean_noise(s: str) -> str:
     return s.strip()
 
 
+@lru_cache(maxsize=1)
+def _get_sentence_segmenter():
+    """Cached pysbd Segmenter — avoids re-loading language rules per call."""
+    import pysbd
+    return pysbd.Segmenter(language="en", clean=True)
+
+
 def _extract_sentences_best_effort(
     raw: str, *, min_words: int = 3,
 ) -> str | None:
@@ -346,7 +360,6 @@ def _extract_sentences_best_effort(
 
     Returns joined sentences or ``None``.
     """
-    import pysbd
     from blingfire import text_to_sentences
 
     from core.pipeline.json_parse import loads_best_effort
@@ -372,7 +385,7 @@ def _extract_sentences_best_effort(
         candidates = [raw]
 
     # Clean + segment
-    seg = pysbd.Segmenter(language="en", clean=True)
+    seg = _get_sentence_segmenter()
     out: list[str] = []
     seen: set[str] = set()
 

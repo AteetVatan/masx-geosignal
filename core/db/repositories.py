@@ -55,12 +55,13 @@ class ProcessingRunRepo:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def create_run(self, run_id: str, tier: str) -> ProcessingRun:
+    async def create_run(self, run_id: str, tier: str, target_date: str | None = None) -> ProcessingRun:
         try:
             run = ProcessingRun(
                 run_id=run_id,
                 status=RunStatus.PENDING,
                 pipeline_tier=tier,
+                target_date=target_date,
                 started_at=datetime.now(UTC),
             )
             self.session.add(run)
@@ -85,6 +86,61 @@ class ProcessingRunRepo:
             completed_at=datetime.now(UTC),
             metrics=metrics,
         )
+
+    async def get_run_by_id(self, run_id: str) -> ProcessingRun | None:
+        """Get a single processing run by run_id."""
+        stmt = select(ProcessingRun).where(ProcessingRun.run_id == run_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_runs_by_date(self, target_date: str) -> list[ProcessingRun]:
+        """Get all runs for a specific target date, newest first."""
+        stmt = (
+            select(ProcessingRun)
+            .where(ProcessingRun.target_date == target_date)
+            .order_by(ProcessingRun.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def has_active_run(self, max_age_hours: int = 2) -> bool:
+        """Check if there is a RUNNING run within the max age window."""
+        from datetime import timedelta
+
+        cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+        stmt = (
+            select(func.count())
+            .select_from(ProcessingRun)
+            .where(
+                ProcessingRun.status == RunStatus.RUNNING,
+                ProcessingRun.started_at >= cutoff,
+            )
+        )
+        result = await self.session.execute(stmt)
+        return (result.scalar() or 0) > 0
+
+    async def mark_stale_runs_failed(self, max_age_hours: int = 2) -> int:
+        """Mark RUNNING runs older than max_age_hours as FAILED. Returns count."""
+        from datetime import timedelta
+
+        cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+        stmt = (
+            update(ProcessingRun)
+            .where(
+                ProcessingRun.status == RunStatus.RUNNING,
+                ProcessingRun.started_at < cutoff,
+            )
+            .values(
+                status=RunStatus.FAILED,
+                error_message="Marked as failed: exceeded max runtime (stale run recovery)",
+                completed_at=datetime.now(UTC),
+            )
+        )
+        result = await self.session.execute(stmt)
+        count = result.rowcount
+        if count:
+            logger.warning("stale_runs_marked_failed", count=count)
+        return count
 
 
 class FeedEntryRepo:
@@ -126,17 +182,19 @@ class FeedEntryRepo:
                 SELECT fe.id, fe.flashpoint_id, fe.url, fe.title, fe.title_en,
                        fe.seendate, fe.domain, fe.language, fe.sourcecountry,
                        fe.description, fe.image, fe.images, fe.hostname,
-                       fe.content, fe.summary,
-                       fe.entities, fe.geo_entities, fe.created_at, fe.updated_at
+                       (fe.content IS NOT NULL) AS has_content,
+                       fe.created_at, fe.updated_at
                 FROM "{feed_table}" fe
                 WHERE fe.flashpoint_id IS NOT NULL
-                AND fe.id NOT IN (
-                    SELECT feed_entry_id FROM feed_entry_jobs
-                    WHERE status IN (:done_summarized, :done_scored)
+                AND NOT EXISTS (
+                    SELECT 1 FROM feed_entry_jobs j
+                    WHERE j.feed_entry_id = fe.id
+                    AND j.status IN (:done_summarized, :done_scored)
                 )
-                AND fe.id NOT IN (
-                    SELECT feed_entry_id FROM feed_entry_jobs
-                    WHERE run_id = :run_id
+                AND NOT EXISTS (
+                    SELECT 1 FROM feed_entry_jobs j
+                    WHERE j.feed_entry_id = fe.id
+                    AND j.run_id = :run_id
                 )
                 LIMIT :limit
             """),
@@ -146,6 +204,29 @@ class FeedEntryRepo:
                 "done_scored": JobStatus.SCORED.value,
                 "limit": limit,
             },
+        )
+        columns = result.keys()
+        return [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
+
+    async def get_entry_content_batch(
+        self,
+        table_ctx: TableContext,
+        entry_ids: list[uuid.UUID],
+    ) -> list[dict[str, Any]]:
+        """Fetch heavy columns (content, entities, geo_entities) for a batch of entries.
+
+        Used by the resume path after get_unprocessed() returns lightweight rows.
+        """
+        if not entry_ids:
+            return []
+        feed_table = table_ctx.feed_entries
+        result = await self.session.execute(
+            text(f"""
+                SELECT id, content, summary, entities, geo_entities
+                FROM "{feed_table}"
+                WHERE id = ANY(:ids)
+            """),
+            {"ids": entry_ids},
         )
         columns = result.keys()
         return [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
@@ -345,6 +426,53 @@ class FeedEntryJobRepo:
         result = await self.session.execute(stmt)
         return (result.rowcount or 0) > 0  # type: ignore[attr-defined]
 
+    async def claim_jobs_bulk(
+        self, feed_entry_ids: list[uuid.UUID], run_id: str
+    ) -> int:
+        """Bulk-claim jobs in a single INSERT … ON CONFLICT DO NOTHING.
+
+        Returns the number of rows actually inserted (i.e. newly claimed).
+        """
+        if not feed_entry_ids:
+            return 0
+        rows = [
+            {
+                "feed_entry_id": eid,
+                "run_id": run_id,
+                "status": JobStatus.FETCHING,
+                "attempts": 1,
+            }
+            for eid in feed_entry_ids
+        ]
+        stmt = pg_insert(FeedEntryJob).values(rows)
+        stmt = stmt.on_conflict_do_nothing(constraint="uq_job_entry_run")
+        result = await self.session.execute(stmt)
+        return result.rowcount or 0  # type: ignore[attr-defined]
+
+    async def bulk_update_status(
+        self,
+        feed_entry_ids: list[uuid.UUID],
+        run_id: str,
+        status: JobStatus,
+    ) -> int:
+        """Update status for many entries in a single UPDATE … WHERE ANY.
+
+        Only for uniform status transitions (no per-row kwargs).
+        Returns count of rows updated.
+        """
+        if not feed_entry_ids:
+            return 0
+        stmt = (
+            update(FeedEntryJob)
+            .where(
+                FeedEntryJob.run_id == run_id,
+                FeedEntryJob.feed_entry_id.in_(feed_entry_ids),
+            )
+            .values(status=status)
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount or 0  # type: ignore[attr-defined]
+
     async def update_status(
         self, feed_entry_id: uuid.UUID, run_id: str, status: JobStatus, **kwargs: object
     ) -> None:
@@ -410,6 +538,36 @@ class VectorRepo:
             set_={"embedding": embedding, "model_name": model_name},
         )
         await self.session.execute(stmt)
+
+    async def bulk_upsert_embeddings(
+        self,
+        entries: list[tuple[uuid.UUID, list[float]]],
+        model_name: str,
+        chunk_size: int = 500,
+    ) -> None:
+        """Bulk upsert embeddings in chunks.
+
+        Chunks to stay within Postgres parameter limits
+        (each embedding is 384 floats → 384 params per row).
+        """
+        if not entries:
+            return
+        for i in range(0, len(entries), chunk_size):
+            chunk = entries[i : i + chunk_size]
+            rows = [
+                {
+                    "feed_entry_id": eid,
+                    "embedding": emb,
+                    "model_name": model_name,
+                }
+                for eid, emb in chunk
+            ]
+            stmt = pg_insert(FeedEntryVector).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[FeedEntryVector.feed_entry_id],
+                set_={"embedding": stmt.excluded.embedding, "model_name": stmt.excluded.model_name},
+            )
+            await self.session.execute(stmt)
 
     async def get_embeddings_for_flashpoint(
         self,
