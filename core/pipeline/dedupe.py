@@ -10,6 +10,7 @@ for content we've already processed.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 import unicodedata
@@ -86,9 +87,7 @@ class DeduplicationEngine:
             mh.update(shingle.encode("utf-8"))
         return mh
 
-    def check_and_register(
-        self, entry_id: str, text: str
-    ) -> DedupeResult:
+    def check_and_register(self, entry_id: str, text: str) -> DedupeResult:
         """
         Check if text is a duplicate, and if not, register it.
 
@@ -147,11 +146,8 @@ class DeduplicationEngine:
         # Not a duplicate — register
         self._hashes[content_hash] = entry_id
         self._minhashes[entry_id] = mh
-        try:
+        with contextlib.suppress(ValueError):
             self._lsh.insert(entry_id, mh)
-        except ValueError:
-            # Already inserted (shouldn't happen but be safe)
-            pass
 
         return DedupeResult(
             content_hash=content_hash,
@@ -160,7 +156,7 @@ class DeduplicationEngine:
         )
 
     @property
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, int]:
         return {
             "total_registered": len(self._hashes),
             "lsh_entries": len(self._minhashes),

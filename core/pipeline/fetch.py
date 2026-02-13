@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Any
 
 import httpx
 import structlog
@@ -31,7 +32,7 @@ class FetchError(Exception):
     """HTTP fetch failed after retries."""
 
 
-class DomainBlocked(Exception):
+class DomainBlockedError(Exception):
     """Domain circuit breaker is open."""
 
 
@@ -94,9 +95,7 @@ class AsyncFetcher:
         self._domain_sems: dict[str, asyncio.Semaphore] = defaultdict(
             lambda: asyncio.Semaphore(per_domain)
         )
-        self._circuit_breakers: dict[str, DomainCircuitBreaker] = defaultdict(
-            DomainCircuitBreaker
-        )
+        self._circuit_breakers: dict[str, DomainCircuitBreaker] = defaultdict(DomainCircuitBreaker)
         self._timeout = timeout
         self._delay = delay
         self._client: httpx.AsyncClient | None = None
@@ -112,8 +111,7 @@ class AsyncFetcher:
             ),
             headers={
                 "User-Agent": (
-                    "Mozilla/5.0 (compatible; GSGI-Bot/1.0; "
-                    "+https://github.com/masx-gsgi)"
+                    "Mozilla/5.0 (compatible; GSGI-Bot/1.0; +https://github.com/masx-gsgi)"
                 ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
@@ -138,11 +136,10 @@ class AsyncFetcher:
         cb = self._circuit_breakers[domain]
 
         if cb.is_open:
-            raise DomainBlocked(f"Circuit breaker open for {domain}")
+            raise DomainBlockedError(f"Circuit breaker open for {domain}")
 
-        async with self._global_sem:
-            async with self._domain_sems[domain]:
-                return await self._do_fetch(url, domain, cb)
+        async with self._global_sem, self._domain_sems[domain]:
+            return await self._do_fetch(url, domain, cb)
 
     @retry(
         retry=retry_if_exception_type(httpx.HTTPStatusError),
@@ -150,9 +147,7 @@ class AsyncFetcher:
         wait=wait_exponential(multiplier=1, min=2, max=30),
         reraise=True,
     )
-    async def _do_fetch(
-        self, url: str, domain: str, cb: DomainCircuitBreaker
-    ) -> FetchResult:
+    async def _do_fetch(self, url: str, domain: str, cb: DomainCircuitBreaker) -> FetchResult:
         """Execute the actual HTTP request with retry."""
         assert self._client is not None
 
@@ -200,11 +195,9 @@ class AsyncFetcher:
         except Exception as exc:
             cb.record_failure()
             duration = int((time.monotonic() - start) * 1000)
-            raise FetchError(
-                f"Failed to fetch {url}: {exc}"
-            ) from exc
+            raise FetchError(f"Failed to fetch {url}: {exc}") from exc
 
-    def get_domain_stats(self) -> dict[str, dict]:
+    def get_domain_stats(self) -> dict[str, dict[str, Any]]:
         """Return circuit breaker stats per domain."""
         return {
             domain: {

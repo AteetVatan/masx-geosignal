@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 
@@ -71,7 +71,7 @@ def compute_hotspot_score(
     - topic:     20% — IPTC topic weight
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
     # 1. Volume score (log-scaled, capped)
     volume = min(math.log2(article_count + 1) / math.log2(max_article_count + 1), 1.0)
@@ -79,7 +79,7 @@ def compute_hotspot_score(
     # 2. Recency score (exponential decay, half-life = 12 hours)
     if max_recency:
         if max_recency.tzinfo is None:
-            max_recency = max_recency.replace(tzinfo=timezone.utc)
+            max_recency = max_recency.replace(tzinfo=UTC)
         age_hours = (now - max_recency).total_seconds() / 3600
         recency = math.exp(-0.693 * age_hours / 12)  # half-life = 12h
     else:
@@ -92,12 +92,7 @@ def compute_hotspot_score(
     topic_weight = TOPIC_WEIGHTS.get(primary_topic.lower(), 0.3)
 
     # Weighted sum
-    score = (
-        0.30 * volume
-        + 0.25 * recency
-        + 0.25 * diversity
-        + 0.20 * topic_weight
-    )
+    score = 0.30 * volume + 0.25 * recency + 0.25 * diversity + 0.20 * topic_weight
 
     return HotspotScore(
         cluster_id=0,  # Set by caller

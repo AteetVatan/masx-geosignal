@@ -31,6 +31,7 @@ logger = structlog.get_logger(__name__)
 @dataclass
 class GeoEntity:
     """A resolved geographic entity."""
+
     name: str
     count: int
     alpha2: str
@@ -118,7 +119,7 @@ def _resolve_country(name: str) -> tuple[str, str, str] | None:
         results = pycountry.countries.search_fuzzy(name)
         if results:
             country = results[0]
-            result = (country.name, country.alpha_2, country.alpha_3)
+            result = (country.name, country.alpha_2, country.alpha_3)  # type: ignore[attr-defined]
             _COUNTRY_CACHE[key] = result
             return result
 
@@ -157,7 +158,7 @@ def extract_geo_entities(
                 location_mentions.append((text, score))
 
     # Resolve each mention to a country
-    country_data: dict[str, dict] = defaultdict(
+    country_data: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"name": "", "alpha2": "", "alpha3": "", "scores": [], "count": 0}
     )
 
@@ -191,13 +192,15 @@ def extract_geo_entities(
     for data in country_data.values():
         scores = data["scores"]
         avg_score = sum(scores) / len(scores) if scores else 0.0
-        result.append(GeoEntity(
-            name=data["name"],
-            count=data["count"],
-            alpha2=data["alpha2"],
-            alpha3=data["alpha3"],
-            avg_score=avg_score,
-        ).to_dict())
+        result.append(
+            GeoEntity(
+                name=data["name"],
+                count=data["count"],
+                alpha2=data["alpha2"],
+                alpha3=data["alpha3"],
+                avg_score=avg_score,
+            ).to_dict()
+        )
 
     # Sort by count descending
     result.sort(key=lambda x: x["count"], reverse=True)

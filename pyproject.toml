@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=69.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "masx-gsgi"
@@ -40,7 +40,7 @@ dependencies = [
     # -- Dedupe --
     "datasketch>=1.6",
     "simhash>=2.1",
-    # -- LLM --
+    # -- LLM (OpenAI SDK used as universal client for Together AI, Mistral, etc.) --
     "openai>=1.12",
     # -- Compression --
     "zstandard>=0.22",
@@ -51,6 +51,12 @@ dependencies = [
     "click>=8.1",
     "tenacity>=8.2",
     "orjson>=3.9",
+    "json-repair>=0.30",
+    "python-rapidjson>=1.14",
+    "pyjson5>=1.6",
+    "tomli_w>=1.0",
+    "blingfire>=0.1.8",
+    "optimum[onnxruntime]>=1.17",
 ]
 
 [project.optional-dependencies]

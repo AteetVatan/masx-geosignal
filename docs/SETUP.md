@@ -88,8 +88,8 @@ DATABASE_URL_SYNC=postgresql://postgres.YOUR_PROJECT_REF:YOUR_DB_PASSWORD@aws-0-
 Optional but recommended for Tier C:
 
 ```env
-# ── OpenAI (only needed for Tier C) ──────────────────
-OPENAI_API_KEY=sk-your-actual-api-key-here
+# ── LLM (only needed for Tier C) ─────────────────────
+LLM_API_KEY=your-together-ai-api-key-here
 ```
 
 All other values have sensible defaults. You can leave them as-is to start.
@@ -120,12 +120,24 @@ pip install -e ".[dev]"
 ```
 
 This installs:
-- **Core**: httpx, SQLAlchemy, asyncpg, trafilatura, sentence-transformers, transformers (NER), pycountry (geo-entities), datasketch, openai, structlog, etc.
+- **Core**: httpx, SQLAlchemy, asyncpg, trafilatura, sentence-transformers, transformers (NER + local summarization), pycountry (geo-entities), datasketch, openai (used as universal LLM client), structlog, blingfire (fast sentence segmentation), tomli_w (TOML serialization), optimum + onnxruntime (ONNX inference), etc.
 - **Dev**: pytest, ruff, mypy, pre-commit, etc.
 
-> **First install may take 3–5 minutes** as `sentence-transformers` downloads PyTorch and the NER model is downloaded on first use.
+> **First install may take 3–5 minutes** as `sentence-transformers` downloads PyTorch and the NER/summarization models are downloaded on first use.
 
-### 3.3 (Optional) Install Extras
+### 3.3 (Optional) Export ONNX Model
+
+For ~2× faster local summarization on CPU, export the DistilBART model to ONNX format:
+
+```bash
+python scripts/export_onnx.py
+# → creates models/distilbart-cnn-onnx/
+# → auto-detected on next pipeline run
+```
+
+> This is optional. Without it, the local summarizer falls back to vanilla PyTorch. The ONNX model only needs to be exported once.
+
+### 3.4 (Optional) Install Extras
 
 ```bash
 # Browser automation (for JS-heavy sites)
@@ -136,7 +148,7 @@ playwright install chromium
 pip install -e ".[translation]"
 ```
 
-### 3.4 Verify Installation
+### 3.5 Verify Installation
 
 ```bash
 python -c "from core.config import get_settings; s = get_settings(); print(f'Tier: {s.pipeline_tier.value}, DB: {s.database_url[:30]}...')"
@@ -147,7 +159,7 @@ Expected output:
 Tier: A, DB: postgresql+asyncpg://post...
 ```
 
-### 3.5 Verify Database Connection
+### 3.6 Verify Database Connection
 
 ```bash
 python _check_db.py
@@ -227,7 +239,7 @@ These tables are created by the `ai-global-signal-grid` upstream project. Each d
 | `title_en` | `core/pipeline/translate.py` | English translation of title |
 | `hostname` | `core/pipeline/translate.py` | Extracted from URL |
 | `content` | `core/pipeline/extract.py` | Full article text (also serves as "processed" marker) |
-| `compressed_content` | IngestService | gzip + base64 of content |
+
 | `summary` | `core/pipeline/summarize.py` | Filled during summarization stage |
 | `entities` | `core/pipeline/ner.py` | NER output (PERSON, ORG, LOC, GPE, etc. + meta) |
 | `geo_entities` | `core/pipeline/geo.py` | Country-resolved locations with ISO codes |
@@ -366,7 +378,7 @@ All feed entries have `content IS NULL` so the pipeline will pick them up as unp
 |------|------|-------------|
 | **A** (default) | ~$0.19/day | Fetch + Extract + Dedupe + NER + Geo-entities + Translation |
 | **B** | ~$0.21/day | + Embeddings + Clustering + Local extractive summaries |
-| **C** | ~$0.35/day | + OpenAI Batch API summaries for all clusters |
+| **C** | ~$0.22/day | + Two-stage summarization (DistilBART local pre-summary → LLM cluster synthesis) |
 
 Set the tier in `.env`:
 ```env
@@ -412,7 +424,7 @@ python -m apps.orchestrator.main --date 2026-02-12
 2. Creates a `processing_run` record with a unique `run_id`
 3. Selects up to 10,000 unprocessed entries (`content IS NULL`)
 4. Claims a job for each entry (idempotent — safe to re-run)
-5. **Ingests**: Fetches HTML → Extracts text → Translates title → Extracts hostname → Runs NER → Resolves geo-entities → Deduplicates → Compresses → Writes enrichment back
+5. **Ingests**: Fetches HTML → Extracts text → Translates title → Extracts hostname → Runs NER → Resolves geo-entities → Deduplicates → Writes enrichment back
 6. **Embeds**: Computes embeddings with sentence-transformers (Tier B/C)
 7. **Clusters**: Groups entries per `flashpoint_id` using kNN + Union-Find (Tier B/C)
 8. **Summarizes**: Writes `news_clusters` rows with summaries and metadata (Tier B/C)
@@ -991,7 +1003,9 @@ feed_entries_YYYYMMDD ─────────────►  FeedEntryRepo
 | `core/pipeline/embed.py` | Sentence embeddings via `all-MiniLM-L6-v2` (Tier B/C) |
 | `core/pipeline/topics.py` | IPTC Media Topic classification via ONNX model |
 | `core/pipeline/cluster.py` | kNN graph + Union-Find clustering (Tier B/C) |
-| `core/pipeline/summarize.py` | Extractive (Tier A/B) or OpenAI Batch API (Tier C) summarization |
+| `core/pipeline/local_summarizer.py` | DistilBART local pre-summarization with ONNX support + ProcessPoolExecutor (8 workers) |
+| `core/pipeline/toml_serde.py` | Token-efficient TOML serialization for LLM I/O |
+| `core/pipeline/summarize.py` | Two-stage: local DistilBART pre-summary → LLM cluster synthesis (Tier C) |
 | `core/pipeline/score.py` | Hotspot scoring algorithm |
 | `core/pipeline/alerts.py` | Alert dispatch (webhook/Slack stubs) |
 
@@ -1030,9 +1044,12 @@ In Railway Dashboard → Variables, add:
 ```
 DATABASE_URL=postgresql+asyncpg://user:pass@host:6543/postgres
 DATABASE_URL_SYNC=postgresql://user:pass@host:6543/postgres
-OPENAI_API_KEY=sk-...          # Only for Tier C
+LLM_API_KEY=your-key-here       # Only for Tier C
+LLM_BASE_URL=https://api.together.xyz/v1
+LLM_MODEL=meta-llama/Llama-3.2-3B-Instruct-Turbo
 PIPELINE_TIER=B
 MAX_CONCURRENT_FETCHES=50
+LOCAL_SUMMARIZER_WORKERS=8      # CPUs for DistilBART (default: 8)
 LOG_LEVEL=INFO
 LOG_FORMAT=json
 RAILWAY_ENVIRONMENT=production
@@ -1081,6 +1098,7 @@ After your first successful pipeline run:
 | Task | Command |
 |------|---------|
 | Install dependencies | `pip install -e ".[dev]"` |
+| Export ONNX model (optional, 2× faster) | `python scripts/export_onnx.py` |
 | Run migrations | `alembic upgrade head` |
 | Seed debug data | `python scripts/seed_debug_data.py --date 2026-02-12` |
 | Reseed (drop + recreate) | `python scripts/seed_debug_data.py --date 2026-02-12 --drop` |

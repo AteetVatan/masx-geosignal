@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from core.pipeline.extract import (
-    ExtractionFailed,
+    ExtractionError,
     _extract_boilerpy3,
     _extract_justext,
     _extract_readability,
@@ -104,7 +104,7 @@ class TestEnsemble:
         assert result.duration_ms >= 0
 
     def test_ensemble_fails_on_empty(self) -> None:
-        with pytest.raises(ExtractionFailed):
+        with pytest.raises(ExtractionError):
             extract_article_text("", min_length=100)
 
     def test_ensemble_respects_min_length(self, sample_html: str) -> None:

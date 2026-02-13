@@ -51,7 +51,7 @@
 | `core/pipeline/lang.py` | fastText language identification |
 | `core/pipeline/embed.py` | sentence-transformers embeddings |
 | `core/pipeline/cluster.py` | kNN graph + Union-Find clustering |
-| `core/pipeline/summarize.py` | Extractive + OpenAI Batch API summaries |
+| `core/pipeline/summarize.py` | Extractive + LLM API summaries (Together AI default) |
 | `core/pipeline/topics.py` | ONNX IPTC topic classification |
 | `core/pipeline/score.py` | Hotspot scoring (4-component weighted) |
 | `core/pipeline/alerts.py` | Webhook / Slack / email dispatch |
@@ -89,7 +89,7 @@ feed_entries (input)
     ├── dedupe (SHA-256 → MinHash LSH)
     ├── embed (sentence-transformers → pgvector)
     ├── cluster per flashpoint_id (kNN + Union-Find)
-    ├── summarize per cluster (local or OpenAI Batch)
+    ├── summarize per cluster (local or LLM API)
     └── score + alert (hotspot formula)
          ↓
 news_clusters (output)
@@ -157,7 +157,7 @@ news_clusters (output)
 | Language ID | fastText LID |
 | Topics | ONNX IPTC classifier |
 | Dedupe | datasketch MinHash LSH |
-| LLM | OpenAI Batch API |
+| LLM | Together AI (OpenAI-compatible) |
 | Logging | structlog (JSON) |
 | CLI | Click |
 | Deploy | Railway (cron services) |

@@ -9,7 +9,7 @@ Processes **10,000+ multilingual news URLs/day**:
 2. **Deduplicates** via SHA-256 + MinHash LSH
 3. **Embeds** using sentence-transformers (pgvector)
 4. **Clusters per flashpoint_id** using kNN + Union-Find
-5. **Summarizes** clusters (local extractive or OpenAI Batch API)
+5. **Summarizes** clusters (local extractive or LLM API via Together AI)
 6. **Writes** to `news_clusters` output table
 
 ## Quick Start
@@ -35,7 +35,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for full system design.
 |------|----------|-------------|
 | **A** | Fetch + Extract + Dedupe + Metadata | ~$6/mo |
 | **B** | + Embeddings + Clustering + Local Summaries | ~$6/mo |
-| **C** | + OpenAI Batch Summaries + Premium Pass | ~$11/mo |
+| **C** | + LLM Summaries (Together AI) + Premium Pass | ~$7/mo |
 
 ## Project Structure
 

@@ -43,6 +43,7 @@ class TestNormalization:
         n2 = engine.normalize_text("café")  # decomposed
         # After NFKD they should be equivalent
         assert len(n1) > 0
+        assert n1 == n2
 
 
 class TestExactDedup:

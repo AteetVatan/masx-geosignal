@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import click
 from sqlalchemy import text
@@ -24,9 +24,8 @@ from sqlalchemy import text
 # ── Ensure project root is on sys.path ────────────────
 sys.path.insert(0, ".")
 
-from core.db.engine import get_async_engine, get_async_session
+from core.db.engine import get_async_session
 from core.db.table_resolver import make_table_name
-
 
 # ───────────────────────────────────────────────────────
 #  Sample Data
@@ -42,12 +41,20 @@ FLASHPOINTS = [
             "on energy infrastructure and diplomatic negotiations."
         ),
         "entities": [
-            "Russia", "Ukraine", "NATO", "European Union",
-            "Volodymyr Zelenskyy", "Vladimir Putin",
+            "Russia",
+            "Ukraine",
+            "NATO",
+            "European Union",
+            "Volodymyr Zelenskyy",
+            "Vladimir Putin",
         ],
         "domains": [
-            "reuters.com", "bbc.com", "cnn.com", "aljazeera.com",
-            "theguardian.com", "dw.com",
+            "reuters.com",
+            "bbc.com",
+            "cnn.com",
+            "aljazeera.com",
+            "theguardian.com",
+            "dw.com",
         ],
     },
     {
@@ -58,12 +65,19 @@ FLASHPOINTS = [
             "regional spillover affecting Lebanon, Yemen, and Red Sea shipping."
         ),
         "entities": [
-            "Israel", "Palestine", "Hamas", "Hezbollah",
-            "Benjamin Netanyahu", "United Nations",
+            "Israel",
+            "Palestine",
+            "Hamas",
+            "Hezbollah",
+            "Benjamin Netanyahu",
+            "United Nations",
         ],
         "domains": [
-            "aljazeera.com", "timesofisrael.com", "bbc.com",
-            "middleeasteye.net", "reuters.com",
+            "aljazeera.com",
+            "timesofisrael.com",
+            "bbc.com",
+            "middleeasteye.net",
+            "reuters.com",
         ],
     },
     {
@@ -75,12 +89,19 @@ FLASHPOINTS = [
             "operations by the United States."
         ),
         "entities": [
-            "China", "Philippines", "United States", "ASEAN",
-            "Xi Jinping", "Ferdinand Marcos Jr.",
+            "China",
+            "Philippines",
+            "United States",
+            "ASEAN",
+            "Xi Jinping",
+            "Ferdinand Marcos Jr.",
         ],
         "domains": [
-            "scmp.com", "reuters.com", "rappler.com",
-            "nikkei.com", "bbc.com",
+            "scmp.com",
+            "reuters.com",
+            "rappler.com",
+            "nikkei.com",
+            "bbc.com",
         ],
     },
     {
@@ -91,11 +112,16 @@ FLASHPOINTS = [
             "regional instability affecting Chad, South Sudan, and Egypt."
         ),
         "entities": [
-            "Sudan", "Rapid Support Forces", "Sudanese Armed Forces",
-            "Abdel Fattah al-Burhan", "Mohamed Hamdan Dagalo",
+            "Sudan",
+            "Rapid Support Forces",
+            "Sudanese Armed Forces",
+            "Abdel Fattah al-Burhan",
+            "Mohamed Hamdan Dagalo",
         ],
         "domains": [
-            "aljazeera.com", "reuters.com", "bbc.com",
+            "aljazeera.com",
+            "reuters.com",
+            "bbc.com",
             "dabangasudan.org",
         ],
     },
@@ -107,12 +133,19 @@ FLASHPOINTS = [
             "and enforcement of environmental protections under the Lula government."
         ),
         "entities": [
-            "Brazil", "Amazon", "Lula da Silva", "COP30",
-            "IBAMA", "European Union",
+            "Brazil",
+            "Amazon",
+            "Lula da Silva",
+            "COP30",
+            "IBAMA",
+            "European Union",
         ],
         "domains": [
-            "g1.globo.com", "reuters.com", "theguardian.com",
-            "mongabay.com", "climatechangenews.com",
+            "g1.globo.com",
+            "reuters.com",
+            "theguardian.com",
+            "mongabay.com",
+            "climatechangenews.com",
         ],
     },
 ]
@@ -189,8 +222,8 @@ FEED_ENTRIES_BY_FP = {
             "seendate": "2026-02-12",
             "image": None,
             "sample_content": (
-                "Запоріжжя зазнало чергових обстрілів з боку російських збройних сил. За даними "
-                "обласної військової адміністрації, було пошкоджено житлові будинки та об'єкти "
+                "Запоріжжя зазнало чергових обстрілів з боку російських збройних сил. За даними "  # noqa: RUF001
+                "обласної військової адміністрації, було пошкоджено житлові будинки та об'єкти "  # noqa: RUF001
                 "інфраструктури. Евакуація мирних жителів з прифронтових територій триває. "
                 "Президент Зеленський закликав міжнародну спільноту посилити тиск на Росію. "
                 "Європейський Союз оголосив про додаткову гуманітарну допомогу для постраждалих регіонів."
@@ -206,11 +239,11 @@ FEED_ENTRIES_BY_FP = {
             "seendate": "2026-02-06",
             "image": None,
             "sample_content": (
-                "Министерство иностранных дел России выступило с заявлением в ответ на новый пакет "
+                "Министерство иностранных дел России выступило с заявлением в ответ на новый пакет "  # noqa: RUF001
                 "санкций Европейского союза. Официальный представитель МИД Мария Захарова назвала "
                 "санкции 'контрпродуктивными' и пообещала ответные меры. Новые ограничения затрагивают "
                 "несколько российских компаний в энергетическом и банковском секторах. Россия заявила, "
-                "что продолжит развивать торговые отношения с Китаем, Индией и другими партнёрами."
+                "что продолжит развивать торговые отношения с Китаем, Индией и другими партнёрами."  # noqa: RUF001
             ),
         },
     ],
@@ -487,12 +520,14 @@ FEED_ENTRIES_BY_FP = {
 #  Table Creation + Seeding
 # ───────────────────────────────────────────────────────
 
+
 async def create_flash_point_table(session, table_name: str, drop: bool = False):
     """Create flash_point_YYYYMMDD with exact upstream schema."""
     if drop:
         await session.execute(text(f'DROP TABLE IF EXISTS "{table_name}" CASCADE'))
 
-    await session.execute(text(f"""
+    await session.execute(
+        text(f"""
         CREATE TABLE IF NOT EXISTS "{table_name}" (
             id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             title       TEXT NOT NULL,
@@ -503,7 +538,8 @@ async def create_flash_point_table(session, table_name: str, drop: bool = False)
             created_at  TIMESTAMPTZ DEFAULT NOW(),
             updated_at  TIMESTAMPTZ DEFAULT NOW()
         )
-    """))
+    """)
+    )
     await session.commit()
     print(f"  ✓ Created table: {table_name}")
 
@@ -513,7 +549,8 @@ async def create_feed_entries_table(session, table_name: str, fp_table: str, dro
     if drop:
         await session.execute(text(f'DROP TABLE IF EXISTS "{table_name}" CASCADE'))
 
-    await session.execute(text(f"""
+    await session.execute(
+        text(f"""
         CREATE TABLE IF NOT EXISTS "{table_name}" (
             id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             flashpoint_id       UUID REFERENCES "{fp_table}"(id) ON DELETE CASCADE,
@@ -536,7 +573,8 @@ async def create_feed_entries_table(session, table_name: str, fp_table: str, dro
             created_at          TIMESTAMPTZ DEFAULT NOW(),
             updated_at          TIMESTAMPTZ DEFAULT NOW()
         )
-    """))
+    """)
+    )
     await session.commit()
     print(f"  ✓ Created table: {table_name}")
 
@@ -546,7 +584,7 @@ async def seed_flashpoints(session, table_name: str) -> dict[str, uuid.UUID]:
     import json
 
     fp_map: dict[str, uuid.UUID] = {}
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for fp in FLASHPOINTS:
         fp_id = uuid.uuid4()
@@ -638,9 +676,7 @@ async def verify_data(session, fp_table: str, fe_table: str):
     fp_count = result.scalar()
     print(f"  {fp_table}: {fp_count} flashpoints")
 
-    result = await session.execute(
-        text(f'SELECT id, title FROM "{fp_table}" ORDER BY created_at')
-    )
+    result = await session.execute(text(f'SELECT id, title FROM "{fp_table}" ORDER BY created_at'))
     for row in result.fetchall():
         print(f"    • [{str(row[0])[:8]}…] {row[1]}")
 
@@ -649,34 +685,44 @@ async def verify_data(session, fp_table: str, fe_table: str):
     fe_count = result.scalar()
     print(f"\n  {fe_table}: {fe_count} entries")
 
-    result = await session.execute(text(f"""
+    result = await session.execute(
+        text(f"""
         SELECT fe.language, COUNT(*) as cnt
         FROM "{fe_table}" fe
         GROUP BY fe.language
         ORDER BY cnt DESC
-    """))
+    """)
+    )
     print(f"  Languages: {dict(result.fetchall())}")
 
     # Unprocessed (content IS NULL)
-    result = await session.execute(text(f"""
+    result = await session.execute(
+        text(f"""
         SELECT COUNT(*) FROM "{fe_table}"
         WHERE flashpoint_id IS NOT NULL AND content IS NULL
-    """))
+    """)
+    )
     unprocessed = result.scalar()
     print(f"  Unprocessed (content IS NULL): {unprocessed}")
 
-    print(f"\n  ✓ Ready for pipeline! Run with --date {fp_table.split('_')[-1][:4]}-{fp_table.split('_')[-1][4:6]}-{fp_table.split('_')[-1][6:]}")
+    print(
+        f"\n  ✓ Ready for pipeline! Run with --date {fp_table.split('_')[-1][:4]}-{fp_table.split('_')[-1][4:6]}-{fp_table.split('_')[-1][6:]}"
+    )
 
 
 # ───────────────────────────────────────────────────────
 #  CLI
 # ───────────────────────────────────────────────────────
 
+
 @click.command()
-@click.option("--date", "target_date", default=None, help="Date suffix (YYYY-MM-DD). Default: today")
+@click.option(
+    "--date", "target_date", default=None, help="Date suffix (YYYY-MM-DD). Default: today"
+)
 @click.option("--drop", is_flag=True, help="Drop existing tables before creating")
 @click.option(
-    "--with-content", is_flag=True,
+    "--with-content",
+    is_flag=True,
     help="Pre-fill content with sample text (for testing enrichment without fetching URLs)",
 )
 def cli(target_date: str | None, drop: bool, with_content: bool):
@@ -685,24 +731,21 @@ def cli(target_date: str | None, drop: bool, with_content: bool):
 
 
 async def _main(target_date_str: str | None, drop: bool, with_content: bool = False):
-    if target_date_str:
-        target = date.fromisoformat(target_date_str)
-    else:
-        target = date.today()
+    target = date.fromisoformat(target_date_str) if target_date_str else date.today()
 
     fp_table = make_table_name("flash_point", target)
     fe_table = make_table_name("feed_entries", target)
 
     content_mode = "pre-filled" if with_content else "NULL (unprocessed)"
-    print(f"╔══════════════════════════════════════════════╗")
-    print(f"║  MASX-GSGI Debug Data Seeder                ║")
-    print(f"╠══════════════════════════════════════════════╣")
+    print("╔══════════════════════════════════════════════╗")
+    print("║  MASX-GSGI Debug Data Seeder                ║")
+    print("╠══════════════════════════════════════════════╣")
     print(f"║  Date:    {target}                         ║")
     print(f"║  FP tbl:  {fp_table:<33}║")
     print(f"║  FE tbl:  {fe_table:<33}║")
-    print(f"║  Drop:    {str(drop):<33}║")
+    print(f"║  Drop:    {drop!s:<33}║")
     print(f"║  Content: {content_mode:<33}║")
-    print(f"╚══════════════════════════════════════════════╝")
+    print("╚══════════════════════════════════════════════╝")
     print()
 
     session_factory = get_async_session()

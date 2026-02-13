@@ -68,7 +68,9 @@ python -m apps.score_alert_worker.main run_20260212_040000_abc12345
 ```
 DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
 DATABASE_URL_SYNC=postgresql://user:pass@host:5432/dbname
-OPENAI_API_KEY=sk-...
+LLM_API_KEY=your-key-here
+LLM_BASE_URL=https://api.together.xyz/v1
+LLM_MODEL=meta-llama/Llama-3.2-3B-Instruct-Turbo
 PIPELINE_TIER=B
 MAX_CONCURRENT_FETCHES=50
 PER_DOMAIN_CONCURRENCY=3

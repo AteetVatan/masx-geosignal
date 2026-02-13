@@ -21,21 +21,16 @@ Output format matches the upstream schema:
 
 from __future__ import annotations
 
-import os
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
 import structlog
 
-logger = structlog.get_logger(__name__)
+from core.config import get_settings
 
-# Model to use
-NER_MODEL = os.getenv(
-    "NER_MODEL",
-    "Davlan/distilbert-base-multilingual-cased-ner-hrl",
-)
+logger = structlog.get_logger(__name__)
 
 # Maximum text length per chunk (in chars)
 MAX_CHUNK_CHARS = 4000
@@ -52,32 +47,42 @@ HF_LABEL_MAP = {
 
 # All entity categories in our schema
 ALL_CATEGORIES = [
-    "GPE", "LAW", "LOC", "ORG", "DATE", "NORP",
-    "EVENT", "MONEY", "PERSON", "QUANTITY",
+    "GPE",
+    "LAW",
+    "LOC",
+    "ORG",
+    "DATE",
+    "NORP",
+    "EVENT",
+    "MONEY",
+    "PERSON",
+    "QUANTITY",
 ]
 
 
 @dataclass
 class NERResult:
     """NER extraction result matching the upstream entities schema."""
+
     entities: dict[str, list[dict[str, Any]]]
     meta: dict[str, Any]
 
 
 @lru_cache(maxsize=1)
-def _get_ner_pipeline():
+def _get_ner_pipeline() -> tuple[Any, str] | None:
     """Load the NER pipeline (lazy, cached)."""
+    model_name = get_settings().ner_model
     try:
         from transformers import pipeline
 
-        ner = pipeline(
+        ner = pipeline(  # type: ignore[call-overload]
             "ner",
-            model=NER_MODEL,
+            model=model_name,
             aggregation_strategy="simple",
             device=-1,  # CPU
         )
-        logger.info("ner_model_loaded", model=NER_MODEL)
-        return ner
+        logger.info("ner_model_loaded", model=model_name)
+        return ner, model_name
     except Exception as exc:
         logger.error("ner_model_load_failed", error=str(exc))
         return None
@@ -120,7 +125,7 @@ def _chunk_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
 
 
 def _merge_entities(
-    raw_entities: list[dict],
+    raw_entities: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
     """Merge raw HuggingFace NER output into our schema format.
 
@@ -158,8 +163,10 @@ def _merge_entities(
         entries = by_category.get(cat, {})
         sorted_entries = sorted(entries.items(), key=lambda x: x[1], reverse=True)
         result[cat] = [
-            {"text": text.title() if cat in ("PERSON", "GPE", "LOC") else text,
-             "score": round(score, 4)}
+            {
+                "text": text.title() if cat in ("PERSON", "GPE", "LOC") else text,
+                "score": round(score, 4),
+            }
             for text, score in sorted_entries[:20]  # Cap at 20 per category
         ]
 
@@ -176,20 +183,23 @@ def extract_entities(text: str) -> NERResult:
     Returns:
         NERResult with entities dict and meta info.
     """
-    ner = _get_ner_pipeline()
+    result = _get_ner_pipeline()
 
     # Empty result template
-    empty = {cat: [] for cat in ALL_CATEGORIES}
+    empty: dict[str, list[dict[str, Any]]] = {cat: [] for cat in ALL_CATEGORIES}
+    model_name = get_settings().ner_model
 
-    if ner is None:
+    if result is None:
         return NERResult(
             entities=empty,
-            meta={"chars": len(text), "model": NER_MODEL, "score": 0.0, "chunks": 0},
+            meta={"chars": len(text), "model": model_name, "score": 0.0, "chunks": 0},
         )
+
+    ner, model_name = result
 
     try:
         chunks = _chunk_text(text)
-        all_raw_entities: list[dict] = []
+        all_raw_entities: list[dict[str, Any]] = []
 
         for chunk in chunks:
             raw = ner(chunk)
@@ -208,7 +218,7 @@ def extract_entities(text: str) -> NERResult:
             entities=merged,
             meta={
                 "chars": len(text),
-                "model": NER_MODEL,
+                "model": model_name,
                 "score": round(avg_score, 4),
                 "chunks": len(chunks),
             },
@@ -218,5 +228,5 @@ def extract_entities(text: str) -> NERResult:
         logger.exception("ner_extraction_failed", error=str(exc))
         return NERResult(
             entities=empty,
-            meta={"chars": len(text), "model": NER_MODEL, "score": 0.0, "chunks": 0},
+            meta={"chars": len(text), "model": model_name, "score": 0.0, "chunks": 0},
         )

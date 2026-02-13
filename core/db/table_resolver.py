@@ -17,12 +17,13 @@ The pipeline can target either:
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timezone
-from typing import Sequence
+from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 # Date pattern in table names: YYYYMMDD
 _DATE_SUFFIX_RE = re.compile(r"_(\d{8})$")
@@ -141,7 +142,6 @@ async def resolve_tables(
             )
 
     return tables
-
 
 
 async def ensure_output_table(

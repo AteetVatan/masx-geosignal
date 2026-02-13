@@ -7,18 +7,16 @@ otherwise detects with fastText (176 languages, ISO 639-1 codes).
 
 from __future__ import annotations
 
-import os
 import re
 from functools import lru_cache
 from pathlib import Path
 
 import structlog
 
+from core.config import get_settings
+
 logger = structlog.get_logger(__name__)
 
-# Model path — downloaded once, cached locally
-_MODEL_DIR = Path(os.getenv("FASTTEXT_MODEL_DIR", "models"))
-_MODEL_PATH = _MODEL_DIR / "lid.176.ftz"
 _DOWNLOAD_URL = "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.ftz"
 
 
@@ -27,16 +25,18 @@ def _get_model():  # type: ignore[no-untyped-def]
     """Lazy-load the fastText LID model."""
     import fasttext
 
-    if not _MODEL_PATH.exists():
+    model_dir = Path(get_settings().fasttext_model_dir)
+    model_path = model_dir / "lid.176.ftz"
+
+    if not model_path.exists():
         logger.info("downloading_fasttext_model", url=_DOWNLOAD_URL)
-        _MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        model_dir.mkdir(parents=True, exist_ok=True)
         import urllib.request
 
-        urllib.request.urlretrieve(_DOWNLOAD_URL, str(_MODEL_PATH))
-        logger.info("fasttext_model_downloaded", path=str(_MODEL_PATH))
+        urllib.request.urlretrieve(_DOWNLOAD_URL, str(model_path))
+        logger.info("fasttext_model_downloaded", path=str(model_path))
 
-    # Suppress fastText warnings about deprecated API
-    model = fasttext.load_model(str(_MODEL_PATH))
+    model = fasttext.load_model(str(model_path))
     return model
 
 
@@ -73,7 +73,7 @@ def detect_language(text: str, existing_lang: str | None = None) -> str:
             lang=lang_code,
             confidence=round(float(confidence), 4),
         )
-        return lang_code
+        return str(lang_code)
 
     except Exception as exc:
         logger.warning("language_detection_failed", error=str(exc))

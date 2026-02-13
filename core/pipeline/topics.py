@@ -7,7 +7,6 @@ Runs on CPU via ONNX Runtime for cost efficiency.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -63,7 +62,9 @@ def _get_classifier():  # type: ignore[no-untyped-def]
         import onnxruntime as ort
         from tokenizers import Tokenizer
 
-        model_dir = Path(os.getenv("IPTC_MODEL_DIR", "models/iptc-classifier"))
+        from core.config import get_settings
+
+        model_dir = Path(get_settings().iptc_model_dir)
 
         if not model_dir.exists():
             logger.info("downloading_iptc_model")

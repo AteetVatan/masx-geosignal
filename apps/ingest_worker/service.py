@@ -9,33 +9,36 @@ Processes a batch of feed_entries through the ingestion pipeline:
 5. Run NER → entities
 6. Resolve geo-entities → geo_entities
 7. Deduplicate (hash + MinHash)
-8. Compress content
-9. Write enrichment fields back to feed_entries
-10. Compute embeddings (sentence-transformers) — Tier B/C only
+8. Write enrichment fields back to feed_entries
+9. Compute embeddings (sentence-transformers) — Tier B/C only
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import gzip
+import contextlib
 import time
 import uuid
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config.settings import Settings
 from core.db.models import JobStatus
 from core.db.repositories import FeedEntryJobRepo, FeedEntryRepo, VectorRepo
-from core.db.table_resolver import TableContext
 from core.pipeline.dedupe import DeduplicationEngine
-from core.pipeline.extract import ExtractionFailed, extract_article_text
-from core.pipeline.fetch import AsyncFetcher, DomainBlocked, FetchError
+from core.pipeline.extract import ExtractionError, extract_article_text
+from core.pipeline.fetch import AsyncFetcher, DomainBlockedError, FetchError
 from core.pipeline.lang import detect_language
-from core.pipeline.translate import translate_title, extract_hostname
+from core.pipeline.translate import extract_hostname, translate_title
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from core.config.settings import Settings
+    from core.db.table_resolver import TableContext
 
 logger = structlog.get_logger(__name__)
 
@@ -65,41 +68,93 @@ class IngestService:
         self._failed = 0
         self._deduped = 0
 
-    async def process_batch(self, entries: Sequence[dict[str, Any]]) -> dict:
+    async def process_batch(self, entries: Sequence[dict[str, Any]]) -> dict[str, int]:
         """Process all entries with concurrency control.
+
+        Fetches are parallelized via asyncio.gather (the slow part).
+        DB writes remain sequential since AsyncSession is not thread-safe.
 
         Args:
             entries: List of dicts from FeedEntryRepo.get_unprocessed().
                      Each dict has keys: id, flashpoint_id, url, title, content, etc.
         """
-        logger.info("ingest_batch_start", total=len(entries))
+        # Split entries: those needing fetch vs those with content from a prior run
+        needs_fetch = [e for e in entries if not e.get("content")]
+        already_fetched = [e for e in entries if e.get("content")]
 
-        async with AsyncFetcher(
-            max_concurrent=self.settings.max_concurrent_fetches,
-            per_domain=self.settings.per_domain_concurrency,
-            timeout=self.settings.fetch_timeout_seconds,
-            delay=self.settings.request_delay_seconds,
-        ) as fetcher:
-            # Process in chunks to manage memory and commits
+        logger.info(
+            "ingest_batch_start",
+            total=len(entries),
+            needs_fetch=len(needs_fetch),
+            resuming=len(already_fetched),
+        )
+
+        # ── Process entries that already have content (resume path) ──
+        if already_fetched:
             chunk_size = 100
-            for i in range(0, len(entries), chunk_size):
-                chunk = entries[i : i + chunk_size]
-                tasks = [
-                    self._process_single(entry, fetcher)
-                    for entry in chunk
-                ]
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-                # Commit after each chunk
+            for i in range(0, len(already_fetched), chunk_size):
+                chunk = already_fetched[i : i + chunk_size]
+                for entry in chunk:
+                    try:
+                        await self._process_fetched(
+                            entry, {"already_has_content": True}
+                        )
+                    except Exception:
+                        logger.exception(
+                            "unhandled_entry_error",
+                            entry_id=str(entry.get("id")),
+                        )
+                        self._failed += 1
                 await self.session.commit()
 
-                logger.info(
-                    "ingest_chunk_done",
-                    chunk=i // chunk_size + 1,
-                    processed=self._processed,
-                    failed=self._failed,
-                    deduped=self._deduped,
-                )
+            logger.info(
+                "resume_chunk_done",
+                processed=self._processed,
+                failed=self._failed,
+                deduped=self._deduped,
+            )
+
+        # ── Process entries that need fetching (normal path) ──
+        if needs_fetch:
+            async with AsyncFetcher(
+                max_concurrent=self.settings.max_concurrent_fetches,
+                per_domain=self.settings.per_domain_concurrency,
+                timeout=self.settings.fetch_timeout_seconds,
+                delay=self.settings.request_delay_seconds,
+            ) as fetcher:
+                chunk_size = 100
+                for i in range(0, len(needs_fetch), chunk_size):
+                    chunk = needs_fetch[i : i + chunk_size]
+
+                    # ── Phase 1: Fetch all URLs in this chunk concurrently ──
+                    fetch_tasks = [
+                        self._safe_fetch(entry, fetcher) for entry in chunk
+                    ]
+                    fetch_results = await asyncio.gather(*fetch_tasks)
+
+                    logger.debug("fetch_results", results=fetch_results)
+
+                    # ── Phase 2: Process results sequentially (DB writes) ──
+                    for entry, fetch_outcome in zip(chunk, fetch_results, strict=True):
+                        try:
+                            await self._process_fetched(entry, fetch_outcome)
+                        except Exception:
+                            logger.exception(
+                                "unhandled_entry_error",
+                                entry_id=str(entry.get("id")),
+                            )
+                            self._failed += 1
+
+                    # Commit after each chunk
+                    await self.session.commit()
+
+                    logger.info(
+                        "ingest_chunk_done",
+                        chunk=i // chunk_size + 1,
+                        processed=self._processed,
+                        failed=self._failed,
+                        deduped=self._deduped,
+                    )
 
         # Run embeddings in batch if tier allows
         if self.settings.tier_has_embeddings:
@@ -114,12 +169,36 @@ class IngestService:
         logger.info("ingest_batch_complete", **stats)
         return stats
 
-    async def _process_single(
+    async def _safe_fetch(
         self, entry: dict[str, Any], fetcher: AsyncFetcher
-    ) -> None:
-        """Process a single feed entry through the full enrichment pipeline.
+    ) -> dict[str, Any]:
+        """Fetch a single URL, returning a result dict instead of raising.
 
-        Pipeline: fetch → extract → translate → hostname → NER → geo → dedupe → store
+        This wrapper lets us use asyncio.gather without losing error info.
+        Returns a dict with either 'result' (FetchResult) or 'error' key.
+        """
+        url = entry.get("url")
+        if not url:
+            return {"error": "no_url"}
+
+        try:
+            result = await fetcher.fetch(url)
+            return {"result": result}
+        except DomainBlockedError:
+            return {"error": "blocked"}
+        except FetchError as exc:
+            return {"error": "http_error", "detail": str(exc)}
+        except Exception as exc:
+            return {"error": "fetch_exception", "detail": str(exc)}
+
+    async def _process_fetched(
+        self, entry: dict[str, Any], fetch_outcome: dict[str, Any]
+    ) -> None:
+        """Process a pre-fetched entry through extract → enrich → dedupe → store.
+
+        Called sequentially after all fetches in a chunk complete.
+        Supports a resume path: if fetch_outcome has 'already_has_content',
+        the entry already has content from a prior run and we skip fetch+extract.
         """
         entry_id = entry["id"]
         entry_id_str = str(entry_id)
@@ -132,31 +211,40 @@ class IngestService:
         start = time.monotonic()
 
         try:
-            # ── Step 1: Fetch + Extract ──────────────────────
-            url = entry.get("url")
-            if not url:
-                await self.job_repo.mark_failed(
-                    entry_id, self.run_id, "No URL", "no_text"
+            # ── Resume shortcut: content already exists from a prior run ──
+            if fetch_outcome.get("already_has_content"):
+                text_content = entry["content"]
+                url = entry["url"]
+                logger.debug("resuming_with_existing_content", chars=len(text_content))
+                # Jump directly to dedupe + enrichment gap-fill (Step 8)
+                return await self._enrich_and_store(
+                    entry, text_content, url, html=None, fetch_ms=0,
                 )
+
+            # ── Handle fetch errors from Phase 1 ─────────────
+            error = fetch_outcome.get("error")
+            if error == "no_url":
+                await self.job_repo.mark_failed(entry_id, self.run_id, "No URL", "no_text")
                 self._failed += 1
                 return
-
-            try:
-                fetch_result = await fetcher.fetch(url)
-                html = fetch_result.html
-                fetch_ms = fetch_result.duration_ms
-            except DomainBlocked:
+            if error == "blocked":
                 await self.job_repo.mark_failed(
                     entry_id, self.run_id, "Domain blocked (circuit breaker)", "blocked"
                 )
                 self._failed += 1
                 return
-            except FetchError as exc:
+            if error in ("http_error", "fetch_exception"):
+                detail = fetch_outcome.get("detail", error)
                 await self.job_repo.mark_failed(
-                    entry_id, self.run_id, str(exc), "http_error"
+                    entry_id, self.run_id, str(detail)[:500], "http_error"
                 )
                 self._failed += 1
                 return
+
+            fetch_result = fetch_outcome["result"]
+            html = fetch_result.html
+            fetch_ms = fetch_result.duration_ms
+            url = entry["url"]
 
             # ── Step 2: Extract article text ─────────────────
             try:
@@ -166,7 +254,7 @@ class IngestService:
                 )
                 text_content = result.text
                 method = result.method
-            except ExtractionFailed as exc:
+            except ExtractionError as exc:
                 reason = "no_text"
                 if "js_required" in str(exc):
                     reason = "js_required"
@@ -175,13 +263,11 @@ class IngestService:
                 elif "paywall" in str(exc):
                     reason = "paywall"
 
-                await self.job_repo.mark_failed(
-                    entry_id, self.run_id, str(exc)[:500], reason
-                )
+                await self.job_repo.mark_failed(entry_id, self.run_id, str(exc)[:500], reason)
                 self._failed += 1
                 return
 
-            extract_ms = int((time.monotonic() - start) * 1000) - fetch_ms
+            extract_ms = int((time.monotonic() - start) * 1000)
 
             # ── Step 3: Detect language ──────────────────────
             detected_lang = detect_language(text_content, entry.get("language"))
@@ -198,11 +284,13 @@ class IngestService:
             geo_entities_data = None
             try:
                 from core.pipeline.ner import extract_entities
+
                 ner_result = extract_entities(text_content)
                 entities_data = {**ner_result.entities, "meta": ner_result.meta}
 
                 # ── Step 7: Geo-entities ─────────────────────
                 from core.pipeline.geo import extract_geo_entities
+
                 geo_entities_data = extract_geo_entities(
                     ner_result.entities,
                     source_country=entry.get("sourcecountry"),
@@ -210,81 +298,129 @@ class IngestService:
             except Exception as exc:
                 logger.warning("enrichment_partial_failure", error=str(exc), step="ner_geo")
 
-            # ── Step 8: Deduplicate ──────────────────────────
-            dedupe_result = self.dedupe_engine.check_and_register(entry_id_str, text_content)
+            # ── Step 8+9: Dedupe + store enrichment ──────────
+            images = _extract_images_from_html(html, url) if html else None
+            await self._enrich_and_store(
+                entry, text_content, url, html=html,
+                fetch_ms=fetch_ms, method=method, extract_ms=extract_ms,
+                title_en=title_en, hostname=hostname,
+                entities_data=entities_data, geo_entities_data=geo_entities_data,
+                images=images,
+            )
 
-            if dedupe_result.is_exact_duplicate or dedupe_result.is_near_duplicate:
-                # Even for duplicates, store enrichment data so the entry
-                # has content (marks it as processed)
-                compressed = base64.b64encode(
-                    gzip.compress(text_content.encode("utf-8"))
-                ).decode("ascii")
+        except Exception as exc:
+            logger.exception("entry_processing_error", error=str(exc))
+            with contextlib.suppress(Exception):
+                await self.job_repo.mark_failed(entry_id, self.run_id, str(exc)[:500], "unknown")
+            self._failed += 1
 
-                await self.entry_repo.update_enrichment(
-                    self.table_ctx,
-                    entry_id,
-                    content=text_content,
-                    compressed_content=compressed,
-                    title_en=title_en,
-                    hostname=hostname,
-                    entities=entities_data,
-                    geo_entities=geo_entities_data,
-                )
+    async def _enrich_and_store(
+        self,
+        entry: dict[str, Any],
+        text_content: str,
+        url: str,
+        *,
+        html: str | None = None,
+        fetch_ms: int = 0,
+        method: str | None = None,
+        extract_ms: int | None = None,
+        title_en: str | None = None,
+        hostname: str | None = None,
+        entities_data: dict[str, Any] | None = None,
+        geo_entities_data: list[dict[str, Any]] | None = None,
+        images: list[str] | None = None,
+    ) -> None:
+        """Shared dedupe + enrichment storage used by both fresh and resume paths.
 
-                await self.job_repo.update_status(
-                    entry_id,
-                    self.run_id,
-                    JobStatus.SKIPPED_DUPLICATE,
-                    content_hash=dedupe_result.content_hash,
-                    is_duplicate=True,
-                    duplicate_of=uuid.UUID(dedupe_result.duplicate_of) if dedupe_result.duplicate_of else None,
-                )
-                self._deduped += 1
-                return
+        For resumed entries (no pre-computed enrichment args), fills gaps
+        using values already present in the entry dict from the DB.
+        """
+        entry_id = entry["id"]
+        entry_id_str = str(entry_id)
 
-            # ── Step 9: Compress + Store all enrichment ──────
-            compressed = base64.b64encode(
-                gzip.compress(text_content.encode("utf-8"))
-            ).decode("ascii")
+        # ── Fill enrichment gaps from existing entry data ──
+        if title_en is None:
+            title_en = entry.get("title_en")
+            if not title_en:
+                detected_lang = detect_language(text_content, entry.get("language"))
+                title = entry.get("title") or ""
+                title_en = translate_title(title, source_lang=detected_lang)
 
-            # Collect images from HTML if we have any
-            images = _extract_images_from_html(html, url)
+        if hostname is None:
+            hostname = entry.get("hostname") or extract_hostname(url)
 
+        if entities_data is None and not entry.get("entities"):
+            try:
+                from core.pipeline.ner import extract_entities
+
+                ner_result = extract_entities(text_content)
+                entities_data = {**ner_result.entities, "meta": ner_result.meta}
+
+                if geo_entities_data is None and not entry.get("geo_entities"):
+                    from core.pipeline.geo import extract_geo_entities
+
+                    geo_entities_data = extract_geo_entities(
+                        ner_result.entities,
+                        source_country=entry.get("sourcecountry"),
+                    )
+            except Exception as exc:
+                logger.warning("enrichment_partial_failure", error=str(exc), step="ner_geo")
+        elif entities_data is None:
+            entities_data = entry.get("entities")
+        if geo_entities_data is None:
+            geo_entities_data = entry.get("geo_entities")
+
+        # ── Deduplicate ──
+        dedupe_result = self.dedupe_engine.check_and_register(entry_id_str, text_content)
+
+        if dedupe_result.is_exact_duplicate or dedupe_result.is_near_duplicate:
             await self.entry_repo.update_enrichment(
                 self.table_ctx,
                 entry_id,
                 content=text_content,
-                compressed_content=compressed,
                 title_en=title_en,
                 hostname=hostname,
-                summary=None,  # Filled later during summarization stage
                 entities=entities_data,
                 geo_entities=geo_entities_data,
-                images=images if images else None,
             )
-
             await self.job_repo.update_status(
                 entry_id,
                 self.run_id,
-                JobStatus.EXTRACTED,
-                extraction_method=method,
-                extraction_chars=len(text_content),
+                JobStatus.SKIPPED_DUPLICATE,
                 content_hash=dedupe_result.content_hash,
-                fetch_duration_ms=fetch_ms,
-                extract_duration_ms=extract_ms,
+                is_duplicate=True,
+                duplicate_of=uuid.UUID(dedupe_result.duplicate_of)
+                if dedupe_result.duplicate_of
+                else None,
             )
+            self._deduped += 1
+            return
 
-            self._processed += 1
+        # ── Store enrichment ──
+        await self.entry_repo.update_enrichment(
+            self.table_ctx,
+            entry_id,
+            content=text_content,
+            title_en=title_en,
+            hostname=hostname,
+            summary=None,
+            entities=entities_data,
+            geo_entities=geo_entities_data,
+            images=images if images else None,
+        )
 
-        except Exception as exc:
-            logger.exception("entry_processing_error", error=str(exc))
-            try:
-                await self.job_repo.mark_failed(
-                    entry_id, self.run_id, str(exc)[:500], "unknown"
-                )
-            except Exception:
-                pass
-            self._failed += 1
+        await self.job_repo.update_status(
+            entry_id,
+            self.run_id,
+            JobStatus.EXTRACTED,
+            extraction_method=method,
+            extraction_chars=len(text_content),
+            content_hash=dedupe_result.content_hash,
+            fetch_duration_ms=fetch_ms,
+            extract_duration_ms=extract_ms,
+        )
+
+        self._processed += 1
 
     async def _batch_embed(self) -> None:
         """Compute embeddings for all extracted entries in this run."""
@@ -329,16 +465,12 @@ class IngestService:
         )
 
         # Store in pgvector
-        for eid, emb in zip(entry_ids, embeddings):
-            await self.vector_repo.upsert_embedding(
-                eid, emb, self.settings.embedding_model
-            )
+        for eid, emb in zip(entry_ids, embeddings, strict=True):
+            await self.vector_repo.upsert_embedding(eid, emb, self.settings.embedding_model)
 
         # Update job status
         for eid in entry_ids:
-            await self.job_repo.update_status(
-                eid, self.run_id, JobStatus.EMBEDDED
-            )
+            await self.job_repo.update_status(eid, self.run_id, JobStatus.EMBEDDED)
 
         await self.session.commit()
         logger.info("batch_embedding_complete", count=len(entry_ids))
@@ -358,7 +490,8 @@ def _extract_images_from_html(html: str, base_url: str) -> list[str]:
     # Open Graph image
     og_match = re.search(
         r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](.*?)["\']',
-        html, re.IGNORECASE,
+        html,
+        re.IGNORECASE,
     )
     if og_match:
         img = og_match.group(1).strip()
@@ -369,7 +502,8 @@ def _extract_images_from_html(html: str, base_url: str) -> list[str]:
     # Twitter card image
     tw_match = re.search(
         r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\'](.*?)["\']',
-        html, re.IGNORECASE,
+        html,
+        re.IGNORECASE,
     )
     if tw_match:
         img = tw_match.group(1).strip()

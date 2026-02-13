@@ -10,17 +10,22 @@ Week 3 scope:
 
 from __future__ import annotations
 
-import uuid
-from typing import Sequence
+from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config.settings import Settings
 from core.db.models import ClusterMember, FeedEntryTopic
-from core.db.table_resolver import TableContext
 from core.pipeline.score import HotspotScore, compute_hotspot_score
+
+if TYPE_CHECKING:
+    import uuid
+    from collections.abc import Sequence
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from core.config.settings import Settings
+    from core.db.table_resolver import TableContext
 
 logger = structlog.get_logger(__name__)
 
@@ -40,9 +45,7 @@ class ScoreAlertService:
         self.settings = settings
         self.table_ctx = table_ctx
 
-    async def score_clusters(
-        self, flashpoint_ids: Sequence[uuid.UUID]
-    ) -> list[HotspotScore]:
+    async def score_clusters(self, flashpoint_ids: Sequence[uuid.UUID]) -> list[HotspotScore]:
         """Score all clusters for the given flashpoints."""
         all_scores: list[HotspotScore] = []
         nc_table = self.table_ctx.news_clusters
@@ -96,9 +99,7 @@ class ScoreAlertService:
 
         return all_scores
 
-    async def _get_primary_topic(
-        self, flashpoint_id: uuid.UUID, cluster_id: int
-    ) -> str:
+    async def _get_primary_topic(self, flashpoint_id: uuid.UUID, cluster_id: int) -> str:
         """Get the most common IPTC topic for entries in a cluster."""
         try:
             from sqlalchemy import select

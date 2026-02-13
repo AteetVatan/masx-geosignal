@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
 from functools import lru_cache
+import logging
+from collections.abc import Callable
+from typing import Any, TypeVar
 
+from sqlalchemy.exc import DBAPIError, DisconnectionError, OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -12,6 +18,10 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from core.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 @lru_cache(maxsize=1)
@@ -47,3 +57,88 @@ def get_async_session() -> async_sessionmaker[AsyncSession]:
         class_=AsyncSession,
         expire_on_commit=False,
     )
+
+
+def retry_on_disconnect(
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> Callable[..., Any]:
+    """Decorator that retries an async function on transient DB disconnects.
+
+    Handles the case where a long-held session's underlying TCP connection
+    drops (e.g. network blip to Supabase/pgBouncer). On disconnect, the
+    connection is invalidated so the pool replaces it on the next use.
+
+    Retries with exponential backoff: base_delay * 2^attempt seconds.
+    """
+
+    _TRANSIENT_ERRORS = (
+        ConnectionResetError,
+        ConnectionRefusedError,
+        ConnectionAbortedError,
+        BrokenPipeError,
+        OSError,
+    )
+
+    def _is_disconnect(exc: BaseException) -> bool:
+        """Check if an exception chain indicates a transient disconnect."""
+        if isinstance(exc, (DisconnectionError, *_TRANSIENT_ERRORS)):
+            return True
+        if isinstance(exc, (DBAPIError, OperationalError)):
+            # Walk the cause chain for underlying connection errors
+            cause = exc.__cause__
+            while cause is not None:
+                if isinstance(cause, _TRANSIENT_ERRORS):
+                    return True
+                # asyncpg-specific error names
+                cause_name = type(cause).__name__
+                if cause_name in (
+                    "ConnectionDoesNotExistError",
+                    "InterfaceError",
+                    "InternalClientError",
+                ):
+                    return True
+                cause = cause.__cause__
+        return False
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            last_exc: BaseException | None = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return await fn(*args, **kwargs)
+                except Exception as exc:
+                    if not _is_disconnect(exc) or attempt == max_retries:
+                        raise
+                    last_exc = exc
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "Transient DB disconnect (attempt %d/%d), "
+                        "retrying in %.1fs: %s",
+                        attempt + 1,
+                        max_retries,
+                        delay,
+                        exc,
+                    )
+                    # Invalidate the connection so the pool drops it
+                    session = _find_session(args, kwargs)
+                    if session is not None:
+                        conn = await session.connection()
+                        await conn.invalidate()
+                    await asyncio.sleep(delay)
+            raise last_exc  # type: ignore[misc]  # unreachable
+
+        return wrapper
+    return decorator
+
+
+def _find_session(args: tuple[Any, ...], kwargs: dict[str, Any]) -> AsyncSession | None:
+    """Try to extract an AsyncSession from method args (self.session pattern)."""
+    # Check kwargs first
+    if "session" in kwargs and isinstance(kwargs["session"], AsyncSession):
+        return kwargs["session"]
+    # Check if first arg is a repo-like object with .session
+    if args and hasattr(args[0], "session") and isinstance(args[0].session, AsyncSession):
+        return args[0].session
+    return None

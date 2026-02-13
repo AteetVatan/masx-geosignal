@@ -90,87 +90,96 @@ def cluster_entries(
     Returns:
         List of ClusterAssignment objects.
     """
-    n = len(entry_ids)
-    if n == 0:
-        return []
+    try:
+        n = len(entry_ids)
+        if n == 0:
+            return []
 
-    if n == 1:
-        cid = uuid.uuid4()
-        return [
-            ClusterAssignment(
-                feed_entry_id=entry_ids[0],
-                cluster_uuid=cid,
-                cluster_id=1,
-                similarity=1.0,
-            )
-        ]
-
-    # Convert to numpy for vectorized operations
-    emb_matrix = np.array(embeddings, dtype=np.float32)
-
-    # L2-normalize (should already be normalized, but ensure)
-    norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    emb_matrix = emb_matrix / norms
-
-    # Compute cosine similarity matrix
-    sim_matrix = emb_matrix @ emb_matrix.T
-
-    # Build kNN graph and Union-Find
-    uf = UnionFind(n)
-    actual_k = min(k, n - 1)
-
-    for i in range(n):
-        # Get top-k neighbors (exclude self)
-        sims = sim_matrix[i].copy()
-        sims[i] = -1  # exclude self
-        top_k_indices = np.argsort(sims)[-actual_k:]
-
-        for j in top_k_indices:
-            if sims[j] >= cosine_threshold:
-                uf.union(i, j)
-
-    # Group by connected component
-    components: dict[int, list[int]] = defaultdict(list)
-    for i in range(n):
-        root = uf.find(i)
-        components[root].append(i)
-
-    # Sort clusters by size (DESC) for dense-rank assignment
-    sorted_clusters = sorted(
-        components.values(),
-        key=lambda members: len(members),
-        reverse=True,
-    )
-
-    # Assign cluster_id (dense rank 1-based)
-    assignments: list[ClusterAssignment] = []
-    for cluster_rank, member_indices in enumerate(sorted_clusters, start=1):
-        cluster_uuid = uuid.uuid4()
-
-        # Compute centroid for similarity scores
-        cluster_embeddings = emb_matrix[member_indices]
-        centroid = cluster_embeddings.mean(axis=0)
-        centroid_norm = np.linalg.norm(centroid)
-        if centroid_norm > 0:
-            centroid = centroid / centroid_norm
-
-        for idx in member_indices:
-            sim = float(np.dot(emb_matrix[idx], centroid))
-            assignments.append(
+        if n == 1:
+            cid = uuid.uuid4()
+            return [
                 ClusterAssignment(
-                    feed_entry_id=entry_ids[idx],
-                    cluster_uuid=cluster_uuid,
-                    cluster_id=cluster_rank,
-                    similarity=sim,
+                    feed_entry_id=entry_ids[0],
+                    cluster_uuid=cid,
+                    cluster_id=1,
+                    similarity=1.0,
                 )
-            )
+            ]
 
-    logger.info(
-        "clustering_complete",
-        total_entries=n,
-        num_clusters=len(sorted_clusters),
-        largest_cluster=len(sorted_clusters[0]) if sorted_clusters else 0,
-    )
+        # Convert to numpy for vectorized operations
+        emb_matrix = np.array(embeddings, dtype=np.float32)
+
+        # L2-normalize (should already be normalized, but ensure)
+        norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        emb_matrix = emb_matrix / norms
+
+        # Compute cosine similarity matrix
+        sim_matrix = emb_matrix @ emb_matrix.T
+
+        # Build kNN graph and Union-Find
+        uf = UnionFind(n)
+        actual_k = min(k, n - 1)
+
+        for i in range(n):
+            # Get top-k neighbors (exclude self)
+            sims = sim_matrix[i].copy()
+            sims[i] = -1  # exclude self
+            top_k_indices = np.argsort(sims)[-actual_k:]
+
+            for j in top_k_indices:
+                if sims[j] >= cosine_threshold:
+                    uf.union(i, j)
+
+        # Group by connected component
+        components: dict[int, list[int]] = defaultdict(list)
+        for i in range(n):
+            root = uf.find(i)
+            components[root].append(i)
+
+        # Sort clusters by size (DESC) for dense-rank assignment
+        sorted_clusters = sorted(
+            components.values(),
+            key=lambda members: len(members),
+            reverse=True,
+        )
+
+        # Assign cluster_id (dense rank 1-based)
+        assignments: list[ClusterAssignment] = []
+        for cluster_rank, member_indices in enumerate(sorted_clusters, start=1):
+            cluster_uuid = uuid.uuid4()
+
+            # Compute centroid for similarity scores
+            cluster_embeddings = emb_matrix[member_indices]
+            centroid = cluster_embeddings.mean(axis=0)
+            centroid_norm = np.linalg.norm(centroid)
+            if centroid_norm > 0:
+                centroid = centroid / centroid_norm
+
+            for idx in member_indices:
+                sim = float(np.dot(emb_matrix[idx], centroid))
+                assignments.append(
+                    ClusterAssignment(
+                        feed_entry_id=entry_ids[idx],
+                        cluster_uuid=cluster_uuid,
+                        cluster_id=cluster_rank,
+                        similarity=sim,
+                    )
+                )
+
+        logger.info(
+            "clustering_complete",
+            total_entries=n,
+            num_clusters=len(sorted_clusters),
+            largest_cluster=len(sorted_clusters[0]) if sorted_clusters else 0,
+        )
+    except Exception as e:
+        logger.error(
+            "clustering_failed",
+            error=str(e),
+            total_entries=n,
+            num_clusters=len(sorted_clusters),
+            largest_cluster=len(sorted_clusters[0]) if sorted_clusters else 0,
+        )   
 
     return assignments

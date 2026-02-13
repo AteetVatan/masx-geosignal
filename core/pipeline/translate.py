@@ -13,7 +13,6 @@ and by the news_clusters output for English-language summaries.
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
 import structlog
@@ -57,8 +56,9 @@ def translate_title(
 def _get_argos_available() -> bool:
     """Check if argostranslate is available."""
     try:
-        import argostranslate.translate
-        return True
+        import importlib.util
+
+        return importlib.util.find_spec("argostranslate.translate") is not None
     except ImportError:
         logger.debug("argostranslate_not_available")
         return False
@@ -129,8 +129,7 @@ def _install_language_package(source_lang: str | None, target_lang: str) -> None
         available = argostranslate.package.get_available_packages()
 
         pkg = next(
-            (p for p in available
-             if p.from_code == source_lang and p.to_code == target_lang),
+            (p for p in available if p.from_code == source_lang and p.to_code == target_lang),
             None,
         )
 
@@ -155,6 +154,7 @@ def extract_hostname(url: str | None) -> str | None:
         return None
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
         return parsed.hostname
     except Exception:

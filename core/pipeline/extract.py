@@ -8,7 +8,7 @@ Strategy: "download first, extract later" with ordered fallback:
   4. BoilerPy3 (SAX-based)
   5. Playwright browser rendering (only when JS/consent detected)
 
-Each extractor returns (text, method_name) or raises ExtractionFailed.
+Each extractor returns (text, method_name) or raises ExtractionError.
 The ensemble tries each in order until one yields text above the
 min_content_length threshold.
 """
@@ -24,7 +24,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class ExtractionFailed(Exception):
+class ExtractionError(Exception):
     """All extractors failed to produce usable content."""
 
 
@@ -182,7 +182,7 @@ def extract_article_text(
 
     Tries each extractor in order.  If all fail and heuristics indicate
     JS/consent is needed AND browser fallback is enabled, raises
-    ExtractionFailed with reason so the caller can dispatch Playwright.
+    ExtractionError with reason so the caller can dispatch Playwright.
     """
     start = time.monotonic()
     warnings: list[str] = []
@@ -213,7 +213,7 @@ def extract_article_text(
     failure_reason = detect_failure_reason(html, None)
     duration = int((time.monotonic() - start) * 1000)
 
-    raise ExtractionFailed(
+    raise ExtractionError(
         f"All extractors failed. Reason: {failure_reason}. "
         f"Tried: {', '.join(w for w in warnings)}. "
         f"Browser needed: {needs_browser_rendering(html)}."

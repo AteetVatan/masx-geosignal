@@ -10,9 +10,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
-import pytest
+from datetime import UTC, datetime, timedelta
 
 from core.pipeline.score import compute_hotspot_score
 
@@ -24,7 +22,7 @@ class TestHotspotScoring:
         score = compute_hotspot_score(
             article_count=10,
             unique_domains=5,
-            max_recency=datetime.now(timezone.utc),
+            max_recency=datetime.now(UTC),
             primary_topic="conflict, war and peace",
         )
         assert 0.0 <= score.score <= 1.0
@@ -33,17 +31,17 @@ class TestHotspotScoring:
         score_low = compute_hotspot_score(
             article_count=2,
             unique_domains=2,
-            max_recency=datetime.now(timezone.utc),
+            max_recency=datetime.now(UTC),
         )
         score_high = compute_hotspot_score(
             article_count=50,
             unique_domains=2,
-            max_recency=datetime.now(timezone.utc),
+            max_recency=datetime.now(UTC),
         )
         assert score_high.score > score_low.score
 
     def test_recency_decay(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         score_recent = compute_hotspot_score(
             article_count=10,
@@ -61,7 +59,7 @@ class TestHotspotScoring:
         assert score_recent.components["recency"] > score_old.components["recency"]
 
     def test_conflict_topic_scores_higher(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         score_conflict = compute_hotspot_score(
             article_count=10,
@@ -80,7 +78,7 @@ class TestHotspotScoring:
         assert score_conflict.score > score_sport.score
 
     def test_diversity_component(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         score_diverse = compute_hotspot_score(
             article_count=10,
@@ -108,7 +106,7 @@ class TestHotspotScoring:
         score = compute_hotspot_score(
             article_count=10,
             unique_domains=3,
-            max_recency=datetime.now(timezone.utc),
+            max_recency=datetime.now(UTC),
         )
         assert "volume" in score.components
         assert "recency" in score.components

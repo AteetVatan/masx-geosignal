@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import click
 import structlog
@@ -25,8 +25,8 @@ import structlog
 from core.config import get_settings
 from core.config.logging import setup_logging
 from core.db.engine import get_async_session
-from core.db.repositories import FeedEntryJobRepo, FeedEntryRepo, ProcessingRunRepo
 from core.db.models import RunStatus
+from core.db.repositories import FeedEntryJobRepo, FeedEntryRepo, ProcessingRunRepo
 from core.db.table_resolver import TableContext, ensure_output_table
 
 logger = structlog.get_logger(__name__)
@@ -37,7 +37,7 @@ async def run_pipeline(target_date: date | None = None) -> None:
     settings = get_settings()
     setup_logging(settings.log_level, settings.log_format)
 
-    run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    run_id = f"run_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
     structlog.contextvars.bind_contextvars(
         run_id=run_id,
@@ -81,9 +81,7 @@ async def run_pipeline(target_date: date | None = None) -> None:
 
             if total == 0:
                 logger.info("no_entries_to_process")
-                await run_repo.update_status(
-                    run_id, RunStatus.COMPLETED, total_entries=0
-                )
+                await run_repo.update_status(run_id, RunStatus.COMPLETED, total_entries=0)
                 await session.commit()
                 return
 
@@ -103,17 +101,12 @@ async def run_pipeline(target_date: date | None = None) -> None:
             await ingest_svc.process_batch(entries)
             await session.commit()
 
-            processed = 0
-            failed = 0
-
             # 8. Run clustering if tier allows
             if settings.tier_has_clustering:
                 from apps.cluster_worker.service import ClusterService
 
                 cluster_svc = ClusterService(session, run_id, settings, table_ctx)
-                flashpoint_ids = await entry_repo.get_flashpoint_ids_for_run(
-                    table_ctx, run_id
-                )
+                flashpoint_ids = await entry_repo.get_flashpoint_ids_for_run(table_ctx, run_id)
                 logger.info("clustering_flashpoints", count=len(flashpoint_ids))
 
                 clusters_created = 0

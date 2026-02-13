@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from core.config import get_settings
 from core.db.models import Base
 
 config = context.config
@@ -17,8 +17,8 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Override URL from environment
-db_url = os.getenv("DATABASE_URL_SYNC", "")
+# Override URL from pydantic-settings (reads .env automatically)
+db_url = get_settings().database_url_sync
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url)
 

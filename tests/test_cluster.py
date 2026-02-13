@@ -17,7 +17,7 @@ import uuid
 import numpy as np
 import pytest
 
-from core.pipeline.cluster import ClusterAssignment, UnionFind, cluster_entries
+from core.pipeline.cluster import UnionFind, cluster_entries
 
 
 @pytest.fixture

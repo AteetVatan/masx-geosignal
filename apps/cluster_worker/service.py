@@ -11,16 +11,19 @@ For each flashpoint_id:
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
+from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config.settings import Settings
 from core.db.models import JobStatus
 from core.db.repositories import ClusterRepo, FeedEntryJobRepo, VectorRepo
-from core.db.table_resolver import TableContext
 from core.pipeline.cluster import cluster_entries
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from core.config.settings import Settings
+    from core.db.table_resolver import TableContext
 
 logger = structlog.get_logger(__name__)
 
@@ -64,18 +67,18 @@ class ClusterService:
                 # Single entry = single cluster
                 entry_id = embeddings_data[0][0]
                 cluster_uuid = uuid.uuid4()
-                await self.cluster_repo.insert_cluster_members([
-                    {
-                        "flashpoint_id": flashpoint_id,
-                        "cluster_uuid": cluster_uuid,
-                        "feed_entry_id": entry_id,
-                        "run_id": self.run_id,
-                        "similarity": 1.0,
-                    }
-                ])
-                await self.job_repo.update_status(
-                    entry_id, self.run_id, JobStatus.CLUSTERED
+                await self.cluster_repo.insert_cluster_members(
+                    [
+                        {
+                            "flashpoint_id": flashpoint_id,
+                            "cluster_uuid": cluster_uuid,
+                            "feed_entry_id": entry_id,
+                            "run_id": self.run_id,
+                            "similarity": 1.0,
+                        }
+                    ]
                 )
+                await self.job_repo.update_status(entry_id, self.run_id, JobStatus.CLUSTERED)
                 return 1
             return 0
 
@@ -108,9 +111,7 @@ class ClusterService:
 
         # 4. Update job status
         for a in assignments:
-            await self.job_repo.update_status(
-                a.feed_entry_id, self.run_id, JobStatus.CLUSTERED
-            )
+            await self.job_repo.update_status(a.feed_entry_id, self.run_id, JobStatus.CLUSTERED)
 
         # Count unique clusters
         unique_clusters = len(set(a.cluster_uuid for a in assignments))

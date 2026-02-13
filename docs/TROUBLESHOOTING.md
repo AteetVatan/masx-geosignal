@@ -90,24 +90,34 @@ GROUP BY cm.cluster_uuid ORDER BY members DESC;
 - Increase Railway service memory allocation
 - Process entries in smaller chunks
 
-### 6. OpenAI Batch API Issues
+### 6. LLM API Issues (Tier C)
 
-**Symptom**: Batch job stuck or results not arriving.
+**Symptom**: LLM summarization failing or producing empty results.
 
 **Investigation**:
 ```python
-import openai
-client = openai.OpenAI()
+from core.pipeline.summarize import get_llm_client
+from core.config import get_settings
 
-# Check batch status
-batch = client.batches.retrieve("batch_xxx")
-print(batch.status, batch.request_counts)
+settings = get_settings()
+client = get_llm_client()
+print(f"Provider: {settings.llm_provider}")
+print(f"Model: {settings.llm_model}")
+print(f"Base URL: {settings.llm_base_url}")
+
+# Test a simple completion
+response = client.chat.completions.create(
+    model=settings.llm_model,
+    messages=[{"role": "user", "content": "Say hello"}],
+    max_tokens=10,
+)
+print(response.choices[0].message.content)
 ```
 
 **Solutions**:
-- Batch API can take up to 24 hours — this is expected
-- Check for malformed JSONL in the batch input file
-- Verify API key has batch permissions
+- Verify `LLM_API_KEY` is set in `.env`
+- Check the model name is valid for the provider
+- Together AI models: see https://docs.together.ai/docs/serverless-models
 - Fallback to local extractive summary (always available)
 
 ### 7. Alembic Migration Failures

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import click
 import structlog
@@ -29,7 +29,7 @@ async def run_ingest(
     setup_logging(settings.log_level, settings.log_format)
 
     if not run_id:
-        run_id = f"ingest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        run_id = f"ingest_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
     from core.db.engine import get_async_session
     from core.db.repositories import FeedEntryRepo
