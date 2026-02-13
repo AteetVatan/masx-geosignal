@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 import uuid
 from datetime import UTC, date, datetime
 
@@ -74,9 +75,15 @@ async def run_pipeline(target_date: date | None = None) -> None:
             await run_repo.update_status(run_id, RunStatus.RUNNING)
             await session.commit()
 
+            # ── Timing bookkeeping ──
+            timings: dict[str, float] = {}
+            pipeline_t0 = time.perf_counter()
+
             # 5. Select entries to process
-            entries = await entry_repo.get_unprocessed(table_ctx, run_id, limit=10000)
+            t0 = time.perf_counter()
+            entries = await entry_repo.get_unprocessed(table_ctx, run_id, limit=20000)
             total = len(entries)
+            timings["entry_selection"] = time.perf_counter() - t0
             logger.info("entries_selected", total=total)
 
             if total == 0:
@@ -86,25 +93,30 @@ async def run_pipeline(target_date: date | None = None) -> None:
                 return
 
             # 6. Create job records (claims)
+            t0 = time.perf_counter()
             claimed = 0
             for entry in entries:
                 if await job_repo.claim_job(entry["id"], run_id):
                     claimed += 1
             await session.commit()
+            timings["job_claiming"] = time.perf_counter() - t0
 
             logger.info("jobs_claimed", claimed=claimed, total=total)
 
-            # 7. Run ingestion stage
+            # 7. Run ingestion stage (fetch + extract + enrich + dedupe + embed)
             from apps.ingest_worker.service import IngestService
 
+            t0 = time.perf_counter()
             ingest_svc = IngestService(session, run_id, settings, table_ctx)
             await ingest_svc.process_batch(entries)
             await session.commit()
+            timings["ingestion_total"] = time.perf_counter() - t0
 
             # 8. Run clustering if tier allows
             if settings.tier_has_clustering:
                 from apps.cluster_worker.service import ClusterService
 
+                t0 = time.perf_counter()
                 cluster_svc = ClusterService(session, run_id, settings, table_ctx)
                 flashpoint_ids = await entry_repo.get_flashpoint_ids_for_run(table_ctx, run_id)
                 logger.info("clustering_flashpoints", count=len(flashpoint_ids))
@@ -114,19 +126,24 @@ async def run_pipeline(target_date: date | None = None) -> None:
                     count = await cluster_svc.cluster_flashpoint(fp_id)
                     clusters_created += count
                 await session.commit()
+                timings["clustering"] = time.perf_counter() - t0
 
                 logger.info("clustering_complete", clusters_created=clusters_created)
 
                 # 9. Summarization
                 from apps.summary_worker.service import SummaryService
 
+                t0 = time.perf_counter()
                 summary_svc = SummaryService(session, run_id, settings, table_ctx)
                 await summary_svc.summarize_all_clusters(flashpoint_ids)
                 await session.commit()
+                timings["summarization"] = time.perf_counter() - t0
 
                 logger.info("summarization_complete")
 
             # 10. Gather stats
+            timings["pipeline_total"] = time.perf_counter() - pipeline_t0
+
             stats = await job_repo.get_run_stats(run_id)
             metrics = {
                 "total_entries": total,
@@ -143,6 +160,33 @@ async def run_pipeline(target_date: date | None = None) -> None:
 
             await run_repo.mark_completed(run_id, metrics)
             await session.commit()
+
+            # ── Timing summary → logs/pipeline_timings.log ──
+            from pathlib import Path
+
+            timing_lines = []
+            for stage, secs in timings.items():
+                mins, s = divmod(secs, 60)
+                timing_lines.append(f"  {stage:.<30s} {int(mins)}m {s:05.2f}s")
+
+            log_dir = Path("logs")
+            log_dir.mkdir(exist_ok=True)
+            with open(log_dir / "pipeline_timings.log", "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*50}\n")
+                f.write(f"  Run:     {run_id}\n")
+                f.write(f"  Date:    {table_ctx.target_date}\n")
+                f.write(f"  Tier:    {settings.pipeline_tier.value}\n")
+                f.write(f"  Entries: {total}\n")
+                f.write(f"  Time:    {datetime.now(UTC).isoformat()}\n")
+                f.write(f"{'='*50}\n")
+                for line in timing_lines:
+                    f.write(line + "\n")
+                f.write(f"{'='*50}\n")
+
+            logger.info(
+                "pipeline_timing_summary",
+                timings={k: round(v, 2) for k, v in timings.items()},
+            )
 
             logger.info("pipeline_completed", **metrics)
 
@@ -172,7 +216,7 @@ def cli(tier: str | None, target_date_str: str | None) -> None:
 
     if tier:
         os.environ["PIPELINE_TIER"] = tier
-
+    target_date_str = "2025-11-03"
     target_date = None
     if target_date_str:
         target_date = date.fromisoformat(target_date_str)
