@@ -158,4 +158,5 @@ def extract_hostname(url: str | None) -> str | None:
         parsed = urlparse(url)
         return parsed.hostname
     except Exception:
+        logger.debug("hostname_extraction_failed", url=url[:120])
         return None

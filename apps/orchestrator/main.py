@@ -29,11 +29,16 @@ from core.db.engine import get_async_session
 from core.db.models import RunStatus
 from core.db.repositories import FeedEntryJobRepo, FeedEntryRepo, ProcessingRunRepo
 from core.db.table_resolver import TableContext, ensure_output_table
+from sqlalchemy import text
 
 logger = structlog.get_logger(__name__)
 
 
-async def run_pipeline(target_date: date | None = None) -> None:
+async def run_pipeline(
+    target_date: date | None = None,
+    *,
+    raw_date_suffix: str | None = None,
+) -> None:
     """Execute the full pipeline for a single daily run."""
     settings = get_settings()
     setup_logging(settings.log_level, settings.log_format)
@@ -49,7 +54,7 @@ async def run_pipeline(target_date: date | None = None) -> None:
         "pipeline_starting",
         tier=settings.pipeline_tier.value,
         max_concurrent=settings.max_concurrent_fetches,
-        target_date=str(target_date) if target_date else "latest",
+        target_date=str(target_date) if target_date else (raw_date_suffix or "latest"),
     )
 
     session_factory = get_async_session()
@@ -60,11 +65,43 @@ async def run_pipeline(target_date: date | None = None) -> None:
         job_repo = FeedEntryJobRepo(session)
 
         # 1. Resolve date-partitioned tables
-        table_ctx = await TableContext.create(session, target_date)
+        if raw_date_suffix:
+            # Raw suffix mode — bypass TableContext.create
+            suffix = raw_date_suffix.replace("-", "")
+            table_ctx = TableContext(
+                feed_entries=f"feed_entries_{suffix}",
+                flash_point=f"flash_point_{suffix}",
+                news_clusters=f"news_clusters_{suffix}",
+                target_date=date.today(),  # placeholder for logging
+            )
+        else:
+            table_ctx = await TableContext.create(session, target_date)
         logger.info("tables_resolved", table_ctx=repr(table_ctx))
 
         # 2. Ensure output table exists
-        await ensure_output_table(session, table_ctx.target_date)
+        if raw_date_suffix:
+            # Create the output table directly (can't use ensure_output_table with fake date)
+            suffix = raw_date_suffix.replace("-", "")
+            nc_table = f"news_clusters_{suffix}"
+            await session.execute(
+                text(f"""
+                    CREATE TABLE IF NOT EXISTS "{nc_table}" (
+                        id BIGSERIAL PRIMARY KEY,
+                        flashpoint_id uuid NOT NULL,
+                        cluster_id integer NOT NULL,
+                        summary text NOT NULL,
+                        article_count integer NOT NULL,
+                        top_domains jsonb DEFAULT '[]'::jsonb,
+                        languages jsonb DEFAULT '[]'::jsonb,
+                        urls jsonb DEFAULT '[]'::jsonb,
+                        images jsonb DEFAULT '[]'::jsonb,
+                        created_at timestamptz DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            )
+            await session.commit()
+        else:
+            await ensure_output_table(session, table_ctx.target_date)
 
         # 3. Create processing run
         await run_repo.create_run(run_id, settings.pipeline_tier.value, target_date=str(table_ctx.target_date))
@@ -234,11 +271,16 @@ def cli(tier: str | None, target_date_str: str | None) -> None:
         os.environ["PIPELINE_TIER"] = tier
 
     target_date = None
+    raw_suffix = None
     if target_date_str:
-        target_date = date.fromisoformat(target_date_str)
+        try:
+            target_date = date.fromisoformat(target_date_str)
+        except ValueError:
+            # Non-ISO date string (e.g. 8888-88-88) — use as raw suffix
+            raw_suffix = target_date_str
 
     try:
-        asyncio.run(run_pipeline(target_date))
+        asyncio.run(run_pipeline(target_date, raw_date_suffix=raw_suffix))
     except Exception:
         logger.exception("orchestrator_crashed")
         sys.exit(1)

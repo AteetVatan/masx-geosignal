@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import functools
-from functools import lru_cache
-import logging
 from collections.abc import Callable
+from functools import lru_cache
 from typing import Any, TypeVar
 
+import structlog
 from sqlalchemy.exc import DBAPIError, DisconnectionError, OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import (
 
 from core.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")
 
@@ -114,12 +114,11 @@ def retry_on_disconnect(
                     last_exc = exc
                     delay = base_delay * (2 ** attempt)
                     logger.warning(
-                        "Transient DB disconnect (attempt %d/%d), "
-                        "retrying in %.1fs: %s",
-                        attempt + 1,
-                        max_retries,
-                        delay,
-                        exc,
+                        "transient_db_disconnect_retrying",
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        delay_s=delay,
+                        error=str(exc),
                     )
                     # Invalidate the connection so the pool drops it
                     session = _find_session(args, kwargs)

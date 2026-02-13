@@ -123,6 +123,6 @@ class ScoreAlertService:
                 counter = Counter(topics)
                 return counter.most_common(1)[0][0]
         except Exception:
-            pass
+            logger.debug("primary_topic_lookup_failed", flashpoint_id=str(flashpoint_id))
 
         return "unclassified"

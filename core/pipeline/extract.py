@@ -23,6 +23,9 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+_MIN_EXTRACTION_CHARS = 200   # min chars for extracted text to be considered usable
+_SPA_BODY_THRESHOLD = 100     # body text below this → likely JS-rendered SPA shell
+
 
 class ExtractionError(Exception):
     """All extractors failed to produce usable content."""
@@ -111,7 +114,7 @@ def _extract_boilerpy3(html: str) -> str | None:
 try:
     from boilerpy3.extractors import ArticleExtractor as _ArticleExtractorCls
     _BOILERPY3_EXTRACTOR = _ArticleExtractorCls()
-except Exception:
+except Exception:  # graceful degradation: boilerpy3 optional
     _BOILERPY3_EXTRACTOR = None  # type: ignore[assignment]
 
 
@@ -153,7 +156,7 @@ def detect_failure_reason(html: str, extracted_text: str | None) -> str | None:
         body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
         if body_match:
             body_text = re.sub(r"<[^>]+>", "", body_match.group(1)).strip()
-            if len(body_text) < 100:
+            if len(body_text) < _SPA_BODY_THRESHOLD:
                 return "js_required"
 
     if extracted_text is None or len(extracted_text.strip()) == 0:
@@ -181,7 +184,7 @@ _EXTRACTORS = [
 
 def extract_article_text(
     html: str,
-    min_length: int = 200,
+    min_length: int = _MIN_EXTRACTION_CHARS,
     use_browser_fallback: bool = False,
 ) -> ExtractionResult:
     """

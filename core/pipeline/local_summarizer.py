@@ -245,6 +245,7 @@ def _summarize_text(text: str) -> str:
             )
             summaries.append(result[0]["summary_text"])
         except Exception:
+            logger.debug("chunk_summarize_failed_truncating", chunk_len=len(chunk))
             summaries.append(chunk[:500])
 
     return " ".join(summaries).strip()

@@ -47,7 +47,10 @@ def extract_date_from_table(table_name: str) -> date | None:
     m = _DATE_SUFFIX_RE.search(table_name)
     if not m:
         return None
-    return datetime.strptime(m.group(1), "%Y%m%d").date()
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d").date()
+    except ValueError:
+        return None
 
 
 async def list_table_dates(

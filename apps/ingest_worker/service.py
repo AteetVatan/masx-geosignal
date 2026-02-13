@@ -42,6 +42,11 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+_ENTRY_CHUNK_SIZE = 100       # entries processed per DB write batch
+_ERROR_MSG_MAX_CHARS = 500    # truncation limit for error messages stored in DB
+_EMBED_CONTENT_CHARS = 1000   # content chars used for embedding text
+_EMBED_BATCH_SIZE = 64        # sentence-transformer encoding batch size
+
 
 class IngestService:
     """Orchestrates the ingestion pipeline for a batch of entries."""
@@ -99,7 +104,7 @@ class IngestService:
             )
             content_map = {row["id"]: row for row in content_rows}
 
-            chunk_size = 100
+            chunk_size = _ENTRY_CHUNK_SIZE
             for i in range(0, len(already_fetched), chunk_size):
                 chunk = already_fetched[i : i + chunk_size]
                 for entry in chunk:
@@ -142,7 +147,7 @@ class IngestService:
                 timeout=self.settings.fetch_timeout_seconds,
                 delay=self.settings.request_delay_seconds,
             ) as fetcher:
-                chunk_size = 100
+                chunk_size = _ENTRY_CHUNK_SIZE
                 for i in range(0, len(needs_fetch), chunk_size):
                     chunk = needs_fetch[i : i + chunk_size]
 
@@ -153,7 +158,14 @@ class IngestService:
                     ]
                     fetch_results = await asyncio.gather(*fetch_tasks)
 
-                    logger.debug("fetch_results", results=fetch_results)
+                    _ok = sum(1 for r in fetch_results if "result" in r)
+                    _err = sum(1 for r in fetch_results if "error" in r)
+                    logger.info(
+                        "=======================fetch_chunk_result=======================",
+                        succeeded=_ok,
+                        failed=_err,
+                        chunk_size=len(chunk),
+                    )
 
                     # ── Phase 2: Process results sequentially (DB writes) ──
                     for entry, fetch_outcome in zip(chunk, fetch_results, strict=True):
@@ -273,7 +285,7 @@ class IngestService:
             if error in ("http_error", "fetch_exception"):
                 detail = fetch_outcome.get("detail", error)
                 await self.job_repo.mark_failed(
-                    entry_id, self.run_id, str(detail)[:500], "http_error"
+                    entry_id, self.run_id, str(detail)[:_ERROR_MSG_MAX_CHARS], "http_error"
                 )
                 self._failed += 1
                 return
@@ -300,7 +312,7 @@ class IngestService:
                 elif "paywall" in str(exc):
                     reason = "paywall"
 
-                await self.job_repo.mark_failed(entry_id, self.run_id, str(exc)[:500], reason)
+                await self.job_repo.mark_failed(entry_id, self.run_id, str(exc)[:_ERROR_MSG_MAX_CHARS], reason)
                 self._failed += 1
                 return
 
@@ -348,7 +360,7 @@ class IngestService:
         except Exception as exc:
             logger.exception("entry_processing_error", error=str(exc))
             with contextlib.suppress(Exception):
-                await self.job_repo.mark_failed(entry_id, self.run_id, str(exc)[:500], "unknown")
+                await self.job_repo.mark_failed(entry_id, self.run_id, str(exc)[:_ERROR_MSG_MAX_CHARS], "unknown")
             self._failed += 1
 
     async def _enrich_and_store(
@@ -491,14 +503,14 @@ class IngestService:
         for row in rows:
             entry_ids.append(row[0])
             title = row[2] or ""
-            content = (row[1] or "")[:1000]  # First 1000 chars
+            content = (row[1] or "")[:_EMBED_CONTENT_CHARS]
             texts.append(f"{title}. {content}".strip())
 
         # Batch embed
         embeddings = embed_texts(
             texts,
             model_name=self.settings.embedding_model,
-            batch_size=64,
+            batch_size=_EMBED_BATCH_SIZE,
         )
 
         # Bulk store in pgvector (chunked to stay within param limits)

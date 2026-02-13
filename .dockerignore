@@ -1,0 +1,61 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / Editor
+.vscode/
+.idea/
+.cursor/
+.agent/
+.gemini/
+
+# Git
+.git/
+.github/
+
+# Environment files
+.env
+.env.local
+
+# Models (downloaded at runtime)
+models/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# MyPy / Ruff caches
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Docker
+.docker/
+docker-compose.yml
+
+# Temp / Debug
+tmp/
+_check_db.py
+_db_output.txt
+_verify_output.txt
+test_output.txt
+pip_output.txt
+mypy_output.txt
+
+# Docs
+docs/
+
+# Logs
+logs/

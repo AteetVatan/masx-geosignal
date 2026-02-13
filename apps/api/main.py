@@ -10,7 +10,7 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
+import subprocess
 import secrets
 import sys
 from contextlib import asynccontextmanager
@@ -148,16 +148,16 @@ async def trigger_pipeline(body: TriggerRequest) -> TriggerResponse:
         cmd=cmd,
     )
 
-    # Spawn child process (non-blocking)
+    # Spawn child process (non-blocking, subprocess.Popen for Windows compat)
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+        process = subprocess.Popen(
+            cmd,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
         )
         logger.info("pipeline_subprocess_started", pid=process.pid)
     except Exception as exc:
-        logger.exception("pipeline_spawn_failed", error=str(exc))
+        logger.exception("pipeline_spawn_failed", error=repr(exc))
         raise HTTPException(
             status_code=500,
             detail=f"Failed to start pipeline: {exc}",

@@ -17,7 +17,7 @@
 9. [Debugging the Pipeline](#9-debugging-the-pipeline)
 10. [Verify Output](#10-verify-output)
 11. [Architecture Reference](#11-architecture-reference)
-12. [Railway Deployment](#12-railway-deployment)
+12. [Production Deployment (CPU / 32 GB)](#12-production-deployment-cpu--32-gb)
 13. [Next Steps](#13-next-steps)
 
 ---
@@ -500,6 +500,22 @@ curl -X POST http://localhost:8080/pipeline/run \
   -H "X-Api-Key: your-secret-api-key-here" \
   -H "Content-Type: application/json" \
   -d '{"target_date": "2026-02-12", "tier": "A"}'
+```
+
+**Quick test (single line):**
+
+```bash
+curl -X POST https://your-app.railway.app/pipeline/run \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: your-secret-api-key-here" \
+  -d '{"target_date": "2026-02-13"}'
+
+
+   $body = '{"target_date": "2025-11-03"}'; curl -s -X POST https://masx-geosignal-production.up.railway.app/pipeline/run -H "Content-Type: application/json" -H "X-Api-Key: EyJdxuE_ec6Caz_vWOu-A-ZgQaNt4vdu8ZR4swhW-mI" -d $body
+
+    $d = '2026-02-13'; curl -s "https://masx-geosignal-production.up.railway.app/pipeline/runs?date=$d" -H "X-Api-Key: EyJdxuE_ec6Caz_vWOu-A-ZgQaNt4vdu8ZR4swhW-mI"
+
+
 ```
 
 **Example: Check run status:**
@@ -1080,65 +1096,228 @@ feed_entries_YYYYMMDD ─────────────►  FeedEntryRepo
 
 ---
 
-## 12. Railway Deployment
+## 12. Production Deployment (CPU / 32 GB)
 
-### 11.1 Create Railway Project
+This section covers deploying the pipeline to a **CPU-only server** with 32 GB RAM and 32 GB disk. The Docker image is optimized for CPU inference (no CUDA libraries).
 
-1. Go to [railway.app](https://railway.app) and create a new project
-2. Connect your GitHub repository
+### 12.1 Docker Image Overview
 
-### 11.2 Add Environment Variables
+The `Dockerfile` installs **CPU-only PyTorch** (~190 MB instead of ~2 GB with CUDA), keeping the final image under 4 GB.
 
-In Railway Dashboard → Variables, add:
+```dockerfile
+# Key optimization: CPU-only PyTorch installed before other deps
+RUN pip install --no-cache-dir torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cpu
+```
+
+### 12.2 Build & Push to GHCR
+
+```bash
+# 1. Authenticate Docker to GHCR (requires `write:packages` scope)
+gh auth refresh -s write:packages          # one-time — adds the scope
+gh auth token | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
+
+# 2. Build the image
+docker build -t ghcr.io/ateetvatan/masx-geosignal:latest \
+             -t ghcr.io/ateetvatan/masx-geosignal:0.1.0 .
+
+# 3. Push both tags
+docker push ghcr.io/ateetvatan/masx-geosignal --all-tags
+```
+
+> **Tip**: Subsequent builds are fast because the CPU PyTorch layer and pip dependencies are cached. Only source code changes trigger a rebuild of the final layers.
+
+### 12.3 Pull & Run on Production Server
+
+```bash
+# 1. Authenticate Docker to GHCR on the server
+echo $GHCR_TOKEN | docker login ghcr.io -u AteetVatan --password-stdin
+
+# 2. Pull the image
+docker pull ghcr.io/ateetvatan/masx-geosignal:latest
+```
+
+### 12.4 Production docker-compose
+
+Create a `docker-compose.prod.yml` on the server (or use envs directly):
+
+```yaml
+version: "3.9"
+
+services:
+  # ── Pipeline (cron trigger or API-triggered) ────────
+  pipeline:
+    image: ghcr.io/ateetvatan/masx-geosignal:latest
+    restart: "no"
+    environment:
+      DATABASE_URL: "${DATABASE_URL}"
+      DATABASE_URL_SYNC: "${DATABASE_URL_SYNC}"
+      PIPELINE_TIER: "B"
+      LLM_API_KEY: "${LLM_API_KEY}"
+      LLM_BASE_URL: "https://api.together.xyz/v1"
+      LLM_MODEL: "meta-llama/Llama-3.2-3B-Instruct-Turbo"
+      MAX_CONCURRENT_FETCHES: "50"
+      LOCAL_SUMMARIZER_WORKERS: "8"
+      LOG_LEVEL: "INFO"
+      LOG_FORMAT: "json"
+    deploy:
+      resources:
+        limits:
+          memory: 28G       # leave ~4 GB headroom for OS + DB driver
+    command: ["python", "-m", "apps.orchestrator.main"]
+
+  # ── API Server (always running) ────────────────────
+  api:
+    image: ghcr.io/ateetvatan/masx-geosignal:latest
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: "${DATABASE_URL}"
+      DATABASE_URL_SYNC: "${DATABASE_URL_SYNC}"
+      PIPELINE_API_KEY: "${PIPELINE_API_KEY}"
+      LOG_LEVEL: "INFO"
+      LOG_FORMAT: "json"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+
+  # ── One-off migration ─────────────────────────────
+  migrate:
+    image: ghcr.io/ateetvatan/masx-geosignal:latest
+    environment:
+      DATABASE_URL_SYNC: "${DATABASE_URL_SYNC}"
+    command: ["alembic", "upgrade", "head"]
+    profiles:
+      - tools
+```
+
+Start the services:
+
+```bash
+# Run migrations first
+docker compose -f docker-compose.prod.yml run --rm migrate
+
+# Start the API server
+docker compose -f docker-compose.prod.yml up -d api
+
+# Trigger pipeline manually or via API
+docker compose -f docker-compose.prod.yml run --rm pipeline
+```
+
+### 12.5 Resource Tuning (32 GB RAM / 32 GB Disk)
+
+| Parameter | Recommended | Why |
+|-----------|-------------|-----|
+| `LOCAL_SUMMARIZER_WORKERS` | `8` | Parallel DistilBART inference; ~1.5 GB RSS per worker |
+| `MAX_CONCURRENT_FETCHES` | `50` | Balanced HTTP concurrency without exhausting sockets |
+| `EMBEDDING_BATCH_SIZE` | `64` | Sentence-transformer batch size; ~2 GB peak for 64 |
+| `PIPELINE_TIER` | `B` or `C` | `B` = embeddings + clustering; `C` adds LLM summaries |
+| Memory limit (pipeline) | `28G` | Leave ~4 GB for OS, network buffers, Docker overhead |
+| Memory limit (API) | `4G` | API is lightweight; pipeline subprocess inherits its own limit |
+
+**Disk usage breakdown (≈ 4 GB image + runtime)**:
+
+| Component | Size |
+|-----------|------|
+| Base Python 3.12-slim | ~150 MB |
+| CPU PyTorch + torchvision | ~190 MB |
+| NLP models (sentence-transformers, NER) | ~1 GB (downloaded on first run) |
+| DistilBART ONNX model | ~550 MB (exported on first run) |
+| Python dependencies | ~2 GB |
+| **Total** | **~4 GB** |
+
+> **Note**: NLP models are downloaded into `/app/models/` on first run. To persist them across container restarts, mount a volume: `-v gsgi_models:/app/models`.
+
+### 12.6 Cron Scheduling
+
+Add to the server's crontab for daily pipeline runs:
+
+```bash
+# Run pipeline daily at 04:00 UTC
+0 4 * * * docker compose -f /path/to/docker-compose.prod.yml run --rm pipeline >> /var/log/gsgi-pipeline.log 2>&1
+```
+
+Or trigger via the API from an external scheduler:
+
+```bash
+curl -X POST https://your-server:8080/pipeline/run \
+  -H "X-Api-Key: $PIPELINE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tier": "B"}'
+```
+
+### 12.7 Health Checks & Monitoring
+
+```bash
+# API health
+curl http://localhost:8080/health
+
+# Check recent pipeline runs
+curl http://localhost:8080/pipeline/runs?date=$(date +%Y-%m-%d) \
+  -H "X-Api-Key: $PIPELINE_API_KEY"
+
+# Container resource usage
+docker stats --no-stream
+```
+
+### 12.8 Update Workflow
+
+```bash
+# Pull new image
+docker pull ghcr.io/ateetvatan/masx-geosignal:latest
+
+# Restart services
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml run --rm migrate
+docker compose -f docker-compose.prod.yml up -d api
+```
+
+### 12.9 Railway Deployment (Alternative)
+
+Railway can host both the API and the pipeline as separate services.
+
+#### Environment Variables
+
+In Railway Dashboard → Variables:
 
 ```
 DATABASE_URL=postgresql+asyncpg://user:pass@host:6543/postgres
 DATABASE_URL_SYNC=postgresql://user:pass@host:6543/postgres
-LLM_API_KEY=your-key-here       # Only for Tier C
-LLM_BASE_URL=https://api.together.xyz/v1
-LLM_MODEL=meta-llama/Llama-3.2-3B-Instruct-Turbo
+LLM_API_KEY=your-key-here
 PIPELINE_TIER=B
-PIPELINE_API_KEY=your-secret-api-key  # Required for API trigger service
+PIPELINE_API_KEY=your-secret-api-key
 MAX_CONCURRENT_FETCHES=50
-LOCAL_SUMMARIZER_WORKERS=8      # CPUs for DistilBART (default: 8)
+LOCAL_SUMMARIZER_WORKERS=8
 LOG_LEVEL=INFO
 LOG_FORMAT=json
-RAILWAY_ENVIRONMENT=production
 ```
 
-### 11.3 Configure Cron Service
+#### Cron Service
 
-1. Create a new service in Railway
-2. Set **Start Command**: `python -m apps.orchestrator.main`
-3. Set **Cron Schedule**: `0 4 * * *` (daily at 4:00 AM UTC)
-4. Set **Restart Policy**: Never (cron jobs should terminate)
+1. Create a service → **Start Command**: `python -m apps.orchestrator.main`
+2. **Cron Schedule**: `0 4 * * *` (daily 4:00 AM UTC)
+3. **Restart Policy**: Never
 
-> The orchestrator auto-detects today's date for table resolution. No `--date` flag needed in production.
+#### API Service
 
-### 11.4 Configure API Trigger Service (Optional)
+1. Create a second service → **Start Command**: `uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT`
+2. **Restart Policy**: Always
+3. Add `PIPELINE_API_KEY` to env vars
 
-If you want to trigger the pipeline via HTTP instead of (or in addition to) cron:
-
-1. Create a **second service** in Railway from the same repo
-2. Set **Start Command**: `uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT`
-3. Set **Restart Policy**: Always
-4. Add `PIPELINE_API_KEY` to the environment variables
-
-The API will be available at your Railway service URL. Use the `/pipeline/run` endpoint to trigger runs.
-
-### 11.5 Run Initial Migration
-
-In Railway console or via a one-off command:
+#### Initial Migration
 
 ```bash
 alembic upgrade head
 ```
 
-### 11.6 Monitor
-
-Check Railway logs for structured JSON output with `run_id`, stage timings, and error details.
-
----
 
 ## 13. Next Steps
 
@@ -1179,3 +1358,7 @@ After your first successful pipeline run:
 | Docker API | `docker compose up api` |
 | Docker migrate | `docker compose run --rm migrate` |
 | Docker test | `docker compose run --rm test` |
+| Build GHCR image | `docker build -t ghcr.io/ateetvatan/masx-geosignal:latest .` |
+| Push to GHCR | `docker push ghcr.io/ateetvatan/masx-geosignal --all-tags` |
+| Prod deploy | `docker compose -f docker-compose.prod.yml up -d api` |
+| Prod pipeline run | `docker compose -f docker-compose.prod.yml run --rm pipeline` |

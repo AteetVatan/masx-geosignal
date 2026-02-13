@@ -24,7 +24,7 @@ def loads_best_effort(raw: str) -> Any:
     # 1) Strict + fast
     try:
         return orjson.loads(s.encode("utf-8"))
-    except Exception:
+    except Exception:  # fallback: try tolerant parser next
         pass
 
     # 2) Tolerant: comments + trailing commas
@@ -33,13 +33,13 @@ def loads_best_effort(raw: str) -> Any:
             s,
             parse_mode=rapidjson.PM_COMMENTS | rapidjson.PM_TRAILING_COMMAS,
         )
-    except Exception:
+    except Exception:  # fallback: try JSON5 parser next
         pass
 
     # 3) JSON5
     try:
         return pyjson5.loads(s)
-    except Exception:
+    except Exception:  # fallback: try json_repair (final)
         pass
 
     # 4) LLM repair (can be used alone too)

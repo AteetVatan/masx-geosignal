@@ -35,6 +35,15 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+_EXTRACTIVE_TOP_ARTICLES = 10       # articles considered for extractive summary
+_EXTRACTIVE_LEAD_SENTENCES = 2      # lead sentences taken per article
+_EXTRACTIVE_MIN_SENT_CHARS = 30     # skip very short fragments
+_EXTRACTIVE_TITLE_FALLBACK = 5      # titles used when no sentences found
+_CHARS_PER_TOKEN = 4                # heuristic for token estimation
+_OUTPUT_TOKEN_RATIO_PCT = 20        # output budget as % of input tokens
+_MIN_OUTPUT_TOKENS = 200            # lower clamp for max_tokens
+_MAX_OUTPUT_TOKENS = 600            # upper clamp for max_tokens
+
 
 @dataclass
 class ClusterSummaryInput:
@@ -71,15 +80,15 @@ def extractive_summary(articles: list[dict[str, Any]], max_sentences: int = 5) -
     """
     sentences: list[str] = []
 
-    for article in articles[:10]:  # Consider top 10 articles
+    for article in articles[:_EXTRACTIVE_TOP_ARTICLES]:
         content = article.get("content", "") or article.get("description", "") or ""
         title = article.get("title_en") or article.get("title") or ""
 
         # Get first 2 sentences from each article
         article_sentences = re.split(r"(?<=[.!?])\s+", content.strip())
-        for sent in article_sentences[:2]:
+        for sent in article_sentences[:_EXTRACTIVE_LEAD_SENTENCES]:
             sent = sent.strip()
-            if len(sent) > 30 and sent not in sentences:
+            if len(sent) > _EXTRACTIVE_MIN_SENT_CHARS and sent not in sentences:
                 sentences.append(sent)
 
         if len(sentences) >= max_sentences:
@@ -87,7 +96,7 @@ def extractive_summary(articles: list[dict[str, Any]], max_sentences: int = 5) -
 
     if not sentences and articles:
         # Fallback to titles
-        for article in articles[:5]:
+        for article in articles[:_EXTRACTIVE_TITLE_FALLBACK]:
             title = article.get("title_en") or article.get("title") or ""
             if title:
                 sentences.append(title)
@@ -209,6 +218,7 @@ SUMMARIZE_SYSTEM_PROMPT = """You are a news intelligence analyst. Summarize the 
 Input format: TOML (articles table array).
 
 Requirements:
+- Output exactly 6 to 7 lines (sentences) — no fewer, no more
 - Include all key facts: who, what, where, when, why
 - If articles are in different languages, synthesize the information
 - Be objective and factual
@@ -228,8 +238,11 @@ def _estimate_max_tokens(messages: list[dict[str, str]]) -> int:
     roughly 30 % of the input size, clamped to [150, 4096].
     """
     total_chars = sum(len(m.get("content", "")) for m in messages)
-    estimated_input_tokens = total_chars // 4
-    budget = max(150, min(estimated_input_tokens * 30 // 100, 4096))
+    estimated_input_tokens = total_chars // _CHARS_PER_TOKEN
+    budget = max(
+        _MIN_OUTPUT_TOKENS,
+        min(estimated_input_tokens * _OUTPUT_TOKEN_RATIO_PCT // 100, _MAX_OUTPUT_TOKENS),
+    )
     return budget
 
 
@@ -378,7 +391,7 @@ def _extract_sentences_best_effort(
         else:
             candidates.extend(_collect_summaries(obj))
     except Exception:
-        pass
+        logger.debug("json_parse_failed_using_raw_text", raw_preview=raw[:80])
 
     # 2) fallback: if no candidates, use the raw text
     if not candidates:
@@ -426,7 +439,7 @@ def _parse_llm_response(raw: str) -> str:
             if summary:
                 return str(summary).strip()
     except Exception:
-        pass
+        logger.debug("json_parse_failed_trying_sentence_extraction", raw_preview=raw[:80])
 
     # 2. Fallback: best-effort JSON + sentence extraction
     extracted = _extract_sentences_best_effort(raw)
