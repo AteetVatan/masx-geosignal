@@ -140,8 +140,19 @@ def _install_language_package(source_lang: str | None, target_lang: str) -> None
                 to_lang=target_lang,
             )
             argostranslate.package.install_from_path(pkg.download())
+            logger.info(
+                "translation_package_installed",
+                from_lang=source_lang,
+                to_lang=target_lang,
+            )
+        else:
+            logger.warning(
+                "translation_package_not_found",
+                from_lang=source_lang,
+                to_lang=target_lang,
+            )
     except Exception as exc:
-        logger.debug("translation_package_install_failed", error=str(exc))
+        logger.warning("translation_package_install_failed", error=str(exc), from_lang=source_lang)
 
 
 def extract_hostname(url: str | None) -> str | None:

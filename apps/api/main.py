@@ -23,6 +23,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.security import APIKeyHeader
 
 from core.config import get_settings
+from core.config.logging import setup_logging
 from core.db.engine import get_async_session
 from core.db.repositories import ProcessingRunRepo
 
@@ -65,6 +66,7 @@ async def verify_api_key(api_key: str | None = Depends(_API_KEY_HEADER)) -> str:
 async def lifespan(app: FastAPI):  # noqa: ARG001
     """Validate critical settings on startup."""
     settings = get_settings()
+    setup_logging(settings.log_level, settings.log_format)
     if settings.is_production and not settings.pipeline_api_key.get_secret_value():
         logger.critical("PIPELINE_API_KEY must be set in production")
         sys.exit(1)

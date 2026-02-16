@@ -1102,12 +1102,16 @@ This section covers deploying the pipeline to a **CPU-only server** with 32 GB R
 
 ### 12.1 Docker Image Overview
 
-The `Dockerfile` installs **CPU-only PyTorch** (~190 MB instead of ~2 GB with CUDA), keeping the final image under 4 GB.
+The `Dockerfile` installs **CPU-only PyTorch** (~190 MB instead of ~2 GB with CUDA) and **Playwright + Chromium** for JS-rendered page scraping, keeping the final image under 5 GB.
 
 ```dockerfile
 # Key optimization: CPU-only PyTorch installed before other deps
 RUN pip install --no-cache-dir torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/cpu
+
+# Browser extras + Chromium for JS-heavy sites
+RUN pip install --no-cache-dir ".[browser]"
+RUN playwright install --with-deps chromium
 ```
 
 ### 12.2 Build & Push to GHCR
@@ -1118,8 +1122,7 @@ gh auth refresh -s write:packages          # one-time — adds the scope
 gh auth token | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
 
 # 2. Build the image
-docker build -t ghcr.io/ateetvatan/masx-geosignal:latest \
-             -t ghcr.io/ateetvatan/masx-geosignal:0.1.0 .
+docker build -t ghcr.io/ateetvatan/masx-geosignal:latest -t ghcr.io/ateetvatan/masx-geosignal:0.1.0 .
 
 # 3. Push both tags
 docker push ghcr.io/ateetvatan/masx-geosignal --all-tags
@@ -1223,16 +1226,17 @@ docker compose -f docker-compose.prod.yml run --rm pipeline
 | Memory limit (pipeline) | `28G` | Leave ~4 GB for OS, network buffers, Docker overhead |
 | Memory limit (API) | `4G` | API is lightweight; pipeline subprocess inherits its own limit |
 
-**Disk usage breakdown (≈ 4 GB image + runtime)**:
+**Disk usage breakdown (≈ 4.4 GB image + runtime)**:
 
 | Component | Size |
 |-----------|------|
 | Base Python 3.12-slim | ~150 MB |
 | CPU PyTorch + torchvision | ~190 MB |
+| Playwright + Chromium | ~400 MB |
 | NLP models (sentence-transformers, NER) | ~1 GB (downloaded on first run) |
 | DistilBART ONNX model | ~550 MB (exported on first run) |
 | Python dependencies | ~2 GB |
-| **Total** | **~4 GB** |
+| **Total** | **~4.4 GB** |
 
 > **Note**: NLP models are downloaded into `/app/models/` on first run. To persist them across container restarts, mount a volume: `-v gsgi_models:/app/models`.
 
